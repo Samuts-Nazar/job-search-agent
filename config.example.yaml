@@ -14,14 +14,19 @@ thresholds:
     seniority_strict: true
 
 models:
-  # Model IDs are OpenRouter slugs. Verify against https://openrouter.ai/api/v1/models
-  # before relying on them -- IDs and availability change often.
-  bulk: "REPLACE_ME"       # cheap, high-volume scoring (job_agent.scoring)
-  quality: "REPLACE_ME"    # CV edits, cover letters, outreach drafts (Phase 2+)
+  # Model IDs are OpenRouter slugs, verified live against
+  # https://openrouter.ai/api/v1/models on 2026-09-16 -- re-check before relying
+  # on them, IDs and availability change often.
+  bulk: "deepseek/deepseek-v4.1-flash"   # cheap, high-volume scoring (job_agent.scoring)
+  quality: "anthropic/claude-haiku-4.5"  # CV edits, cover letters, outreach drafts (Phase 2+)
   fallbacks:
-    bulk: []
-    quality: []
-  eval_candidates: []      # models compared by `job eval`; see README
+    bulk: ["z-ai/glm-5.3-flash", "qwen/qwen3.8-flash"]
+    quality: ["z-ai/glm-5.3"]
+  eval_candidates:      # models compared by `job eval`; see PROJECT.md §7 / README
+    - "z-ai/glm-5.3-flash"
+    - "deepseek/deepseek-v4.1-flash"
+    - "qwen/qwen3.8-flash"
+    - "google/gemma-4-26b-a4b-it"   # paid variant; the :free variant has no structured-output support
 
 sources:
   djinni:
@@ -29,13 +34,20 @@ sources:
     categories: ["QA", "QA Automation", "Support", "Sysadmin", "ML AI", "Python"]
   dou:
     enabled: true
-    categories: ["QA", "QA Automation", "Support", "Sysadmin", "ML AI", "Python"]
+    # DOU's `category` param (verified live 2026-09-16) has no separate "QA
+    # Automation" -- its "QA" category covers both manual and automation.
+    categories: ["QA", "Support", "SysAdmin", "AI/ML", "Python"]
   remoteok:
     enabled: true
+    # remoteok.com/api's `?tag=` query param does NOT filter server-side
+    # (verified live 2026-09-16) -- these tags are matched client-side against
+    # each posting's `tags` array in job_agent/sources/remoteok.py.
     tags: ["qa", "support", "sysadmin", "machine-learning", "python"]
   wwr:
     enabled: true
-    categories: ["programming", "devops-and-sysadmin", "customer-support"]
+    # WWR only has category RSS feeds for 2 of our 6 targets (verified live
+    # 2026-09-16); QA, QA Automation, ML AI and Python have no WWR category.
+    categories: ["remote-devops-sysadmin-jobs", "remote-customer-support-jobs"]
   linkedin:
     enabled: true
     keywords: ["QA", "QA Automation", "Support", "Sysadmin", "Machine Learning", "Python"]

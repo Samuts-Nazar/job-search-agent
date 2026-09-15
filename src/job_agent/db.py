@@ -97,10 +97,11 @@ def init_db(conn: sqlite3.Connection) -> None:
 
 @dataclass
 class Posting:
+    """A normalized posting. Sources produce these; dedup.py fills in
+    canonical_url and dedup_hash before insert_posting() is called."""
+
     source: str
     url: str
-    canonical_url: str
-    dedup_hash: str
     title: str
     description: str
     company: str | None = None
@@ -109,6 +110,8 @@ class Posting:
     published_at: str | None = None
     salary_raw: str | None = None
     raw_tags: list[str] = field(default_factory=list)
+    canonical_url: str | None = None
+    dedup_hash: str | None = None
 
 
 def posting_exists(conn: sqlite3.Connection, *, canonical_url: str, dedup_hash: str) -> bool:
@@ -122,6 +125,8 @@ def posting_exists(conn: sqlite3.Connection, *, canonical_url: str, dedup_hash: 
 def insert_posting(
     conn: sqlite3.Connection, posting: Posting, status: PostingStatus = "new"
 ) -> int:
+    if posting.canonical_url is None or posting.dedup_hash is None:
+        raise ValueError("posting.canonical_url and .dedup_hash must be set before insert")
     ts = now_iso()
     cur = conn.execute(
         """
