@@ -19,6 +19,13 @@
             ruff
           ];
 
+          # Manylinux wheels (numpy, pandas, ...) pulled in by uv expect these
+          # shared libs on a normal linker search path, which NixOS doesn't have.
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
+            pkgs.stdenv.cc.cc.lib
+            pkgs.zlib
+          ];
+
           shellHook = ''
             export UV_PYTHON=${pkgs.python312}/bin/python3
           '';
