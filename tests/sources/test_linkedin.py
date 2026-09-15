@@ -50,6 +50,28 @@ def test_row_to_posting_handles_missing_description_and_remote_and_salary():
     assert posting.published_at is None
 
 
+def test_row_to_posting_handles_pandas_nan_for_missing_cells():
+    # Real jobspy DataFrames represent some missing cells as float NaN rather
+    # than None/NaT (observed live: `date_posted` came back as `float('nan')`
+    # for a row with no other date-bearing rows in the same batch, and
+    # `.isoformat()` on that crashed). `float('nan')` is truthy in Python, so
+    # a plain `if value:` check does not catch it.
+    row = {
+        "job_url": "u2",
+        "title": "B",
+        "date_posted": float("nan"),
+        "min_amount": float("nan"),
+        "max_amount": float("nan"),
+        "currency": float("nan"),
+        "company": float("nan"),
+    }
+
+    posting = linkedin.row_to_posting(row)
+    assert posting.published_at is None
+    assert posting.salary_raw is None
+    assert posting.company is None
+
+
 def test_collect_linkedin_for_keyword_uses_scrape_jobs(monkeypatch):
     captured = {}
 

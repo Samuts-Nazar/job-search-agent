@@ -21,24 +21,33 @@ from job_agent.config import LinkedinSourceConfig
 from job_agent.db import Posting
 
 
+def _clean(value: Any) -> Any:
+    """pandas represents missing cells as float NaN, not None -- normalize both to None."""
+    if value is None:
+        return None
+    if isinstance(value, float) and value != value:  # NaN != NaN
+        return None
+    return value
+
+
 def _salary_raw(row: dict[str, Any]) -> str | None:
-    min_amount = row.get("min_amount")
-    max_amount = row.get("max_amount")
+    min_amount = _clean(row.get("min_amount"))
+    max_amount = _clean(row.get("max_amount"))
     if not min_amount and not max_amount:
         return None
-    currency = row.get("currency") or ""
+    currency = _clean(row.get("currency")) or ""
     return f"{currency} {min_amount or '?'}-{max_amount or '?'}".strip()
 
 
 def row_to_posting(row: dict[str, Any]) -> Posting:
-    date_posted = row.get("date_posted")
+    date_posted = _clean(row.get("date_posted"))
     return Posting(
         source="linkedin",
-        url=row.get("job_url", ""),
-        title=row.get("title", ""),
-        description=row.get("description") or "",
-        company=row.get("company"),
-        location=row.get("location"),
+        url=_clean(row.get("job_url")) or "",
+        title=_clean(row.get("title")) or "",
+        description=_clean(row.get("description")) or "",
+        company=_clean(row.get("company")),
+        location=_clean(row.get("location")),
         remote_type="remote" if row.get("is_remote") else None,
         published_at=date_posted.isoformat() if date_posted else None,
         salary_raw=_salary_raw(row),

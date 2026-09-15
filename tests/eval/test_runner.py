@@ -35,7 +35,7 @@ def test_evaluate_model_on_posting_success_first_try():
         )
 
     with _make_client(handler) as client:
-        postings = runner.load_eval_postings(None)
+        postings = runner.load_eval_postings(runner.SAMPLE_EVAL_POSTINGS_PATH)
         valid, retries, latency_ms, cost_usd, error = runner.evaluate_model_on_posting(
             client, model="test/model", facts_summary="facts", posting=postings[0]
         )
@@ -59,7 +59,7 @@ def test_evaluate_model_on_posting_invalid_json_exhausts_retries():
         )
 
     with _make_client(handler) as client:
-        postings = runner.load_eval_postings(None)
+        postings = runner.load_eval_postings(runner.SAMPLE_EVAL_POSTINGS_PATH)
         valid, retries, latency_ms, cost_usd, error = runner.evaluate_model_on_posting(
             client, model="test/model", facts_summary="facts", posting=postings[0]
         )
@@ -87,7 +87,7 @@ def test_evaluate_model_aggregates_across_postings():
         )
 
     with _make_client(handler) as client:
-        postings = runner.load_eval_postings(None)
+        postings = runner.load_eval_postings(runner.SAMPLE_EVAL_POSTINGS_PATH)
         report = runner.evaluate_model(
             client, model="test/model", facts_summary="facts", postings=postings
         )
