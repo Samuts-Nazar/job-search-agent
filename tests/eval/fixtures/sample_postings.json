@@ -1,0 +1,35 @@
+[
+  {
+    "source": "sample",
+    "url": "https://example.invalid/jobs/1",
+    "title": "QA Automation Engineer",
+    "description": "We need a QA automation engineer with Python and Playwright experience to build and maintain our end-to-end test suite for a fintech web app.",
+    "company": "Example Fintech Co",
+    "location": "Remote, EU",
+    "remote_type": "remote",
+    "salary_raw": "$2500-3500",
+    "raw_tags": ["QA Automation", "Python"]
+  },
+  {
+    "source": "sample",
+    "url": "https://example.invalid/jobs/2",
+    "title": "Manual QA Engineer",
+    "description": "Manual QA engineer needed for a mobile banking app. Responsibilities include writing test cases, exploratory testing, and working closely with developers on bug triage.",
+    "company": "Example Bank",
+    "location": "Kyiv, Ukraine",
+    "remote_type": "hybrid",
+    "salary_raw": "$1200-1800",
+    "raw_tags": ["QA"]
+  },
+  {
+    "source": "sample",
+    "url": "https://example.invalid/jobs/3",
+    "title": "Customer Support Specialist (Technical)",
+    "description": "Technical customer support specialist for a SaaS analytics product. You will triage tickets, reproduce bugs, and write internal documentation. Some scripting in Python is a plus.",
+    "company": "Example SaaS Inc",
+    "location": "Remote, Worldwide",
+    "remote_type": "remote",
+    "salary_raw": null,
+    "raw_tags": ["Support"]
+  }
+]

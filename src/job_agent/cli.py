@@ -158,6 +158,9 @@ def main(
         asyncio.run(_poll(conn, secrets))
     except KeyboardInterrupt:
         typer.echo("Shutting down.")
+    except FileNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
     finally:
         conn.close()
 
@@ -182,13 +185,32 @@ def render_test() -> None:
     typer.echo("job render-test: not implemented yet -- the Typst CV template is Phase 2 work.")
 
 
-@app.command(name="eval")
-def eval_command(config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config")) -> None:
-    """Compare models in config.yaml -> models.eval_candidates."""
-    from job_agent.eval.runner import run_eval
+def _load_facts_summary_for_eval() -> str:
+    try:
+        facts_data = facts.load_facts(DEFAULT_FACTS_PATH)
+    except FileNotFoundError:
+        facts_data = facts.load_facts("data.example/facts.example.yaml")
+    return facts.render_facts_summary(facts_data)
 
-    config = load_config(config_path)
-    run_eval(config)
+
+@app.command(name="eval")
+def eval_command(
+    config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
+) -> None:
+    """Compare models in config.yaml -> models.eval_candidates."""
+    from job_agent.eval.runner import format_eval_report, run_eval
+
+    try:
+        config = load_config(config_path)
+        secrets = load_secrets(env_path)
+    except (FileNotFoundError, ValidationError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+
+    facts_summary = _load_facts_summary_for_eval()
+    reports = run_eval(config, secrets, facts_summary=facts_summary)
+    typer.echo(format_eval_report(reports))
 
 
 if __name__ == "__main__":
