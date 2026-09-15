@@ -1,0 +1,31 @@
+# Secrets and private runtime data
+.env
+config.yaml
+data/
+output/
+*.db
+*.db-journal
+
+# Rendered artifacts
+*.pdf
+eval-output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node (OpenResume check tooling, Phase 2)
+node_modules/
+
+# uv
+.python-version
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,49 @@
+# Copy this file to config.yaml (gitignored) and edit. See README for details.
+
+mode: wide  # wide | selective
+
+thresholds:
+  # Placeholder defaults -- tune after the first few real runs (see job stats).
+  wide:
+    fit_score_min: 40
+    salary_floor_usd: null
+    seniority_strict: false
+  selective:
+    fit_score_min: 70
+    salary_floor_usd: null
+    seniority_strict: true
+
+models:
+  # Model IDs are OpenRouter slugs. Verify against https://openrouter.ai/api/v1/models
+  # before relying on them -- IDs and availability change often.
+  bulk: "REPLACE_ME"       # cheap, high-volume scoring (job_agent.scoring)
+  quality: "REPLACE_ME"    # CV edits, cover letters, outreach drafts (Phase 2+)
+  fallbacks:
+    bulk: []
+    quality: []
+  eval_candidates: []      # models compared by `job eval`; see README
+
+sources:
+  djinni:
+    enabled: true
+    categories: ["QA", "QA Automation", "Support", "Sysadmin", "ML AI", "Python"]
+  dou:
+    enabled: true
+    categories: ["QA", "QA Automation", "Support", "Sysadmin", "ML AI", "Python"]
+  remoteok:
+    enabled: true
+    tags: ["qa", "support", "sysadmin", "machine-learning", "python"]
+  wwr:
+    enabled: true
+    categories: ["programming", "devops-and-sysadmin", "customer-support"]
+  linkedin:
+    enabled: true
+    keywords: ["QA", "QA Automation", "Support", "Sysadmin", "Machine Learning", "Python"]
+    results_wanted: 40   # ~25-50 per run per spec
+  nofluffjobs:
+    enabled: false        # no public API; implement last if feasible (Phase 3)
+
+categories: ["QA", "QA Automation", "Support", "Sysadmin", "ML AI", "Python"]
+
+budget:
+  monthly_usd: 10

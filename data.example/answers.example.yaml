@@ -1,0 +1,42 @@
+# Example answer bank for application forms (knockout questions, fixed fields).
+# Copy the real one to data/answers.yaml (gitignored).
+#
+# Phase 3 only reads from this file for knockout questions -- it never
+# generates these answers. If a required answer is missing, the pipeline
+# stops and asks in Telegram instead of guessing.
+
+work_authorization:
+  eu: "requires_sponsorship"
+  us: "requires_sponsorship"
+  uk: "requires_sponsorship"
+  ukraine: "authorized"
+
+relocation:
+  willing: false
+  notes: "Open to fully remote roles only."
+
+notice_period_days: 30
+
+salary_expectation:
+  currency: "USD"
+  monthly_min: 2500
+  monthly_max: 3500
+
+timezone: "UTC+2"
+
+languages:
+  - name: "English"
+    cefr: "C1"
+  - name: "Ukrainian"
+    cefr: "native"
+
+links:
+  linkedin: "https://linkedin.com/in/jane-example"
+  github: "https://github.com/jane-example"
+  portfolio: null
+
+years_of_experience:
+  qa_automation: 3
+  manual_qa: 1
+  ml_ai: 0
+  general: 3

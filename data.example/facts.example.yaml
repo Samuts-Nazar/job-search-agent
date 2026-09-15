@@ -1,0 +1,69 @@
+# Example fact registry. Copy the real one to data/facts.yaml (gitignored).
+#
+# This is the single source of truth for everything the agent may write about
+# the candidate. Scoring, CV tailoring, and cover letters may only reference
+# facts listed here -- nothing is ever invented.
+
+candidate:
+  name: "Jane Example"
+  email: "jane.example@example.com"
+  phone: "+1 555 0100"
+  city: "Kyiv"
+  country: "Ukraine"
+  timezone: "UTC+2"
+  links:
+    linkedin: "https://linkedin.com/in/jane-example"
+    github: "https://github.com/jane-example"
+
+cv_tracks:
+  - id: qa_automation
+    title: "QA Automation Engineer"
+  - id: manual_qa
+    title: "Manual QA Engineer"
+  - id: ml_ai
+    title: "ML/AI Engineer"
+  - id: general
+    title: "Software Engineer"
+
+skills:
+  - name: "Python"
+    tracks: [qa_automation, ml_ai, general]
+  - name: "Playwright"
+    tracks: [qa_automation]
+  - name: "pytest"
+    tracks: [qa_automation, general]
+  - name: "Manual testing"
+    tracks: [manual_qa]
+  - name: "SQL"
+    tracks: [qa_automation, manual_qa, ml_ai, general]
+
+projects:
+  - id: example_project_1
+    name: "Example Test Automation Framework"
+    tracks: [qa_automation]
+    summary: "Built a Playwright + pytest framework for an e-commerce checkout flow."
+    metrics:
+      - "Reduced regression run time from 4h to 40m"
+    tools: ["Python", "Playwright", "pytest", "GitHub Actions"]
+    dates: "2024-01 to 2024-11"
+
+experience:
+  - id: example_job_1
+    employer: "Example Corp"
+    title: "QA Automation Engineer"
+    tracks: [qa_automation, general]
+    dates: "2023-02 to present"
+    bullets:
+      - "Automated end-to-end tests for the checkout flow, cutting regression time from 4h to 40m."
+      - "Maintained a shared pytest fixture library used across three product teams."
+
+education:
+  - institution: "Example State University"
+    degree: "B.Sc. Computer Science"
+    dates: "2018 to 2022"
+
+languages:
+  - name: "English"
+    cefr: "C1"
+  - name: "Ukrainian"
+    cefr: "native"
