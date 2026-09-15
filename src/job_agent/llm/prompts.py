@@ -18,10 +18,9 @@ def load_prompt_template(name: str) -> Template:
     return Template(path.read_text(encoding="utf-8"))
 
 
-def render_scoring_prompt(*, cv_track: str, facts_summary: str, posting: Posting) -> str:
+def render_scoring_prompt(*, facts_summary: str, posting: Posting) -> str:
     template = load_prompt_template("scoring_v1")
     return template.substitute(
-        cv_track=cv_track,
         facts_summary=facts_summary,
         source=posting.source,
         title=posting.title,

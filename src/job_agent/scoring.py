@@ -30,11 +30,9 @@ SYSTEM_PROMPT = "You are a precise, conservative job-fit scorer."
 
 
 def _attempt_score(
-    client: httpx.Client, *, model: str, cv_track: str, facts_summary: str, posting: Posting
+    client: httpx.Client, *, model: str, facts_summary: str, posting: Posting
 ) -> tuple[ScoringResult, CompletionResult]:
-    user_prompt = render_scoring_prompt(
-        cv_track=cv_track, facts_summary=facts_summary, posting=posting
-    )
+    user_prompt = render_scoring_prompt(facts_summary=facts_summary, posting=posting)
     payload = build_structured_payload(
         model=model,
         system_prompt=SYSTEM_PROMPT,
@@ -54,7 +52,6 @@ def score_posting(
     posting_id: int,
     posting: Posting,
     config: Config,
-    cv_track: str,
     facts_summary: str,
 ) -> ScoringResult | None:
     models_to_try = [config.models.bulk, *config.models.fallbacks.bulk]
@@ -66,7 +63,6 @@ def score_posting(
                 scoring_result, completion = _attempt_score(
                     client,
                     model=model,
-                    cv_track=cv_track,
                     facts_summary=facts_summary,
                     posting=posting,
                 )

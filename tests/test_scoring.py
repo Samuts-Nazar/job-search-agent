@@ -65,7 +65,7 @@ def posting_id(conn, posting):
 
 
 def test_score_posting_success_on_first_attempt(monkeypatch, conn, config, posting, posting_id):
-    def fake_attempt_score(client, *, model, cv_track, facts_summary, posting):
+    def fake_attempt_score(client, *, model, facts_summary, posting):
         completion = CompletionResult(
             raw_content=VALID_RESULT.model_dump_json(),
             model=model,
@@ -83,7 +83,6 @@ def test_score_posting_success_on_first_attempt(monkeypatch, conn, config, posti
         posting_id=posting_id,
         posting=posting,
         config=config,
-        cv_track="qa_automation",
         facts_summary="facts",
     )
 
@@ -105,7 +104,7 @@ def test_score_posting_falls_back_after_retries_exhausted(
 ):
     attempts = []
 
-    def fake_attempt_score(client, *, model, cv_track, facts_summary, posting):
+    def fake_attempt_score(client, *, model, facts_summary, posting):
         attempts.append(model)
         if model == "primary/model":
             raise OpenRouterError("bad json")
@@ -126,7 +125,6 @@ def test_score_posting_falls_back_after_retries_exhausted(
         posting_id=posting_id,
         posting=posting,
         config=config,
-        cv_track="qa_automation",
         facts_summary="facts",
     )
 
@@ -141,7 +139,7 @@ def test_score_posting_falls_back_after_retries_exhausted(
 def test_score_posting_marks_score_failed_when_all_models_fail(
     monkeypatch, conn, config, posting, posting_id
 ):
-    def fake_attempt_score(client, *, model, cv_track, facts_summary, posting):
+    def fake_attempt_score(client, *, model, facts_summary, posting):
         raise OpenRouterError("always fails")
 
     monkeypatch.setattr(scoring, "_attempt_score", fake_attempt_score)
@@ -152,7 +150,6 @@ def test_score_posting_marks_score_failed_when_all_models_fail(
         posting_id=posting_id,
         posting=posting,
         config=config,
-        cv_track="qa_automation",
         facts_summary="facts",
     )
 

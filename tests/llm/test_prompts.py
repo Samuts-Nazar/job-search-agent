@@ -19,11 +19,9 @@ def make_posting(**overrides) -> Posting:
 
 def test_render_scoring_prompt_substitutes_all_fields():
     prompt = render_scoring_prompt(
-        cv_track="qa_automation",
         facts_summary="Candidate knows Python, Playwright, pytest.",
         posting=make_posting(),
     )
-    assert "qa_automation" in prompt
     assert "Candidate knows Python, Playwright, pytest." in prompt
     assert "QA Automation Engineer" in prompt
     assert "Acme" in prompt
@@ -34,8 +32,6 @@ def test_render_scoring_prompt_substitutes_all_fields():
 
 def test_render_scoring_prompt_handles_missing_optional_fields():
     posting = make_posting(company=None, location=None, remote_type=None, salary_raw=None)
-    prompt = render_scoring_prompt(
-        cv_track="general", facts_summary="Facts.", posting=posting
-    )
+    prompt = render_scoring_prompt(facts_summary="Facts.", posting=posting)
     assert "unknown" in prompt
     assert "not stated" in prompt
