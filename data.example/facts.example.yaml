@@ -3,6 +3,11 @@
 # This is the single source of truth for everything the agent may write about
 # the candidate. Scoring, CV tailoring, and cover letters may only reference
 # facts listed here -- nothing is ever invented.
+#
+# `example: true` makes `job` and `job check-data` refuse to run against
+# this file. Set it to `false` (or delete the line) in your real copy.
+
+example: true
 
 candidate:
   name: "Jane Example"

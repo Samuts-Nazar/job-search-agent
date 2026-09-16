@@ -4,6 +4,11 @@
 # Phase 3 only reads from this file for knockout questions -- it never
 # generates these answers. If a required answer is missing, the pipeline
 # stops and asks in Telegram instead of guessing.
+#
+# `example: true` makes `job` and `job check-data` refuse to run against
+# this file. Set it to `false` (or delete the line) in your real copy.
+
+example: true
 
 work_authorization:
   eu: "requires_sponsorship"

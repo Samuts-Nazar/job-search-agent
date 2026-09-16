@@ -1,3 +1,5 @@
+import shutil
+
 import pytest
 from typer.testing import CliRunner
 
@@ -140,3 +142,98 @@ def test_render_test_command_reports_not_implemented():
     result = runner.invoke(cli.app, ["render-test"])
     assert result.exit_code == 0
     assert "not implemented yet" in result.stdout
+
+
+def test_check_data_command_fails_on_missing_files(tmp_path):
+    result = runner.invoke(
+        cli.app,
+        [
+            "check-data",
+            "--facts",
+            str(tmp_path / "facts.yaml"),
+            "--answers",
+            str(tmp_path / "answers.yaml"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "FAILED" in result.stdout
+    assert "file not found" in result.stdout
+
+
+def test_check_data_command_passes_on_edited_real_data(tmp_path):
+    facts_path = tmp_path / "facts.yaml"
+    answers_path = tmp_path / "answers.yaml"
+    facts_path.write_text(
+        "example: false\n"
+        "candidate:\n"
+        "  name: Real Person\n"
+        '  email: "real@realmail.com"\n'
+        '  phone: "+1 555"\n'
+        "  city: Kyiv\n"
+        "  country: Ukraine\n"
+        "  timezone: UTC+2\n"
+        "  links:\n"
+        "    linkedin: https://linkedin.com/in/real\n"
+        "cv_tracks:\n"
+        "  - id: general\n"
+        "    title: Engineer\n"
+        "languages:\n"
+        "  - name: English\n"
+        "    cefr: B2\n",
+        encoding="utf-8",
+    )
+    answers_path.write_text(
+        "example: false\n"
+        "work_authorization:\n"
+        "  eu: authorized\n"
+        "  us: requires_sponsorship\n"
+        "  uk: requires_sponsorship\n"
+        "  ukraine: authorized\n"
+        "relocation:\n"
+        "  willing: false\n"
+        "notice_period_days: 14\n"
+        "salary_expectation:\n"
+        "  currency: USD\n"
+        "  monthly_min: 3000\n"
+        "  monthly_max: 4000\n"
+        "timezone: UTC+2\n"
+        "languages:\n"
+        "  - name: English\n"
+        "    cefr: B2\n"
+        "links:\n"
+        "  linkedin: https://linkedin.com/in/real\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        cli.app, ["check-data", "--facts", str(facts_path), "--answers", str(answers_path)]
+    )
+    assert result.exit_code == 0
+    assert "OK" in result.stdout
+
+
+def test_main_refuses_to_run_with_example_data(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--facts",
+            "data.example/facts.example.yaml",
+            "--answers",
+            "data.example/answers.example.yaml",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Refusing to run" in result.output
+    assert "candidate.email" in result.output

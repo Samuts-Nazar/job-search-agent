@@ -32,7 +32,13 @@ repository.
 6. Edit `config.yaml`: set `models.bulk` / `models.quality` to real OpenRouter
    model IDs (verify current IDs at https://openrouter.ai/models), and fill in
    `data/facts.yaml` / `data/answers.yaml` with real candidate data (see
-   `data.example/` for the expected shape).
+   `data.example/` for the expected shape). Set `example: false` (or delete
+   that line) in both files, then run `uv run job check-data` -- `job`
+   refuses to run otherwise. It also refuses if any identity-like field
+   (name, email, phone, LinkedIn/GitHub links, employer, institution,
+   project name) still literally matches the example file, or if a
+   required field (including every knockout field in `answers.yaml`) is
+   missing -- it prints exactly which fields.
 
 ### OpenRouter privacy setting
 
@@ -47,6 +53,7 @@ and must be avoided or the setting must be re-checked.
 uv run job              # full pipeline run, then stays up for Telegram interaction (Ctrl+C to stop)
 uv run job eval         # compare models in config.yaml -> models.eval_candidates
 uv run job stats        # print pipeline/spend stats
+uv run job check-data   # validate data/facts.yaml and data/answers.yaml (also run before every `job`)
 uv run job render-test  # CV template check (Phase 2+)
 ```
 

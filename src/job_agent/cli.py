@@ -8,7 +8,7 @@ import sqlite3
 import typer
 from pydantic import ValidationError
 
-from job_agent import db, dedup, facts, prefilter, scoring, telegram_bot
+from job_agent import data_guard, db, dedup, facts, prefilter, scoring, telegram_bot
 from job_agent.config import Config, Secrets, load_config, load_secrets
 from job_agent.db import Posting
 from job_agent.llm.client import make_client
@@ -22,7 +22,6 @@ app = typer.Typer(add_completion=False)
 
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_DB_PATH = "data/jobs.db"
-DEFAULT_FACTS_PATH = "data/facts.yaml"
 DEFAULT_ENV_PATH = ".env"
 
 
@@ -44,7 +43,11 @@ def _count_by_source(postings: list[Posting]) -> dict[str, int]:
 
 
 def run_pipeline(
-    config: Config, secrets: Secrets, conn: sqlite3.Connection
+    config: Config,
+    secrets: Secrets,
+    conn: sqlite3.Connection,
+    *,
+    facts_path: str = data_guard.FACTS_PATH,
 ) -> tuple[list[sqlite3.Row], dict[str, int]]:
     typer.echo("Collecting postings...")
     raw_postings = collect_all(config)
@@ -70,7 +73,7 @@ def run_pipeline(
 
     typer.echo(f"{len(kept)} passed prefilter, scoring...")
 
-    facts_data = facts.load_facts(DEFAULT_FACTS_PATH)
+    facts_data = facts.load_facts(facts_path)
     facts_summary = facts.render_facts_summary(facts_data)
 
     scored_rows: list[sqlite3.Row] = []
@@ -128,6 +131,8 @@ def main(
     config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
     env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
+    facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
+    answers_path: str = typer.Option(data_guard.ANSWERS_PATH, "--answers"),
 ) -> None:
     """Run the full pipeline once, then stay up for Telegram interaction (Ctrl+C to stop)."""
     if ctx.invoked_subcommand is not None:
@@ -143,11 +148,19 @@ def main(
         typer.echo(f"Missing or invalid secrets in {env_path}: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    data_results = data_guard.check_data_safety(facts_path, answers_path)
+    if not all(result.ok for result in data_results):
+        typer.echo("Refusing to run: candidate data is not ready.", err=True)
+        typer.echo(data_guard.format_check_report(data_results), err=True)
+        raise typer.Exit(code=1)
+
     conn = db.connect(db_path)
     db.init_db(conn)
 
     try:
-        scored_rows, source_counts_this_run = run_pipeline(config, secrets, conn)
+        scored_rows, source_counts_this_run = run_pipeline(
+            config, secrets, conn, facts_path=facts_path
+        )
         typer.echo("Sending Telegram digest...")
         asyncio.run(
             _send_digest(
@@ -179,6 +192,18 @@ def stats(db_path: str = typer.Option(DEFAULT_DB_PATH, "--db")) -> None:
         conn.close()
 
 
+@app.command(name="check-data")
+def check_data(
+    facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
+    answers_path: str = typer.Option(data_guard.ANSWERS_PATH, "--answers"),
+) -> None:
+    """Validate data/facts.yaml and data/answers.yaml (used by `job` before every run)."""
+    results = data_guard.check_data_safety(facts_path, answers_path)
+    typer.echo(data_guard.format_check_report(results))
+    if not all(result.ok for result in results):
+        raise typer.Exit(code=1)
+
+
 @app.command(name="render-test")
 def render_test() -> None:
     """CV template check -- not implemented yet (Phase 2: Typst template)."""
@@ -187,7 +212,7 @@ def render_test() -> None:
 
 def _load_facts_summary_for_eval() -> str:
     try:
-        facts_data = facts.load_facts(DEFAULT_FACTS_PATH)
+        facts_data = facts.load_facts(data_guard.FACTS_PATH)
     except FileNotFoundError:
         facts_data = facts.load_facts("data.example/facts.example.yaml")
     return facts.render_facts_summary(facts_data)
