@@ -138,10 +138,13 @@ def test_stats_command_runs_on_empty_db(tmp_path):
     assert "LLM spend" in result.stdout
 
 
-def test_render_test_command_reports_not_implemented():
-    result = runner.invoke(cli.app, ["render-test"])
+@pytest.mark.skipif(shutil.which("typst") is None, reason="typst CLI not on PATH")
+def test_render_test_command_renders_and_checks(tmp_path):
+    output_path = tmp_path / "cv.pdf"
+    result = runner.invoke(cli.app, ["render-test", "--output", str(output_path)])
     assert result.exit_code == 0
-    assert "not implemented yet" in result.stdout
+    assert output_path.exists()
+    assert "ATS checks: OK" in result.stdout
 
 
 def test_check_data_command_fails_on_missing_files(tmp_path):

@@ -9,8 +9,8 @@ routes every decision through a Telegram bot for human approval.
 See [`PROJECT.md`](./PROJECT.md) for the full specification.
 
 **Status:** Phase 1 in progress (collection, dedup, prefilter, scoring, Telegram
-digest, `job eval`, `job stats`). No personal data is ever committed to this
-repository.
+digest, `job eval`, `job stats`, `job check-data`, `job render-test`). No
+personal data is ever committed to this repository.
 
 ## Setup
 
@@ -39,6 +39,11 @@ repository.
    project name) still literally matches the example file, or if a
    required field (including every knockout field in `answers.yaml`) is
    missing -- it prints exactly which fields.
+7. One-time, only if you'll run `job render-test` (CV template check): install
+   the OpenResume parser's Node dependencies:
+   ```
+   cd src/job_agent/cv/openresume && npm install && cd -
+   ```
 
 ### OpenRouter privacy setting
 
@@ -54,7 +59,7 @@ uv run job              # full pipeline run, then stays up for Telegram interact
 uv run job eval         # compare models in config.yaml -> models.eval_candidates
 uv run job stats        # print pipeline/spend stats
 uv run job check-data   # validate data/facts.yaml and data/answers.yaml (also run before every `job`)
-uv run job render-test  # CV template check (Phase 2+)
+uv run job render-test  # render the CV template against data.example content, run ATS + OpenResume checks
 ```
 
 ## Adding a source

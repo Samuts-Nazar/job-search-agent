@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 
 import typer
@@ -205,9 +206,44 @@ def check_data(
 
 
 @app.command(name="render-test")
-def render_test() -> None:
-    """CV template check -- not implemented yet (Phase 2: Typst template)."""
-    typer.echo("job render-test: not implemented yet -- the Typst CV template is Phase 2 work.")
+def render_test(
+    output_path: str = typer.Option("output/render-test-cv.pdf", "--output"),
+    track: str = typer.Option("qa_automation", "--track"),
+) -> None:
+    """Render the CV template against data.example content and check the output.
+
+    Runs the ATS text-layer checks on every render, plus the OpenResume
+    parser (report only) since this checks the template itself.
+    """
+    from job_agent.cv.ats_checks import check_ats
+    from job_agent.cv.content import build_cv_content
+    from job_agent.cv.openresume_check import OpenResumeCheckError, run_openresume_parser
+    from job_agent.cv.render import RenderError, render_cv
+
+    facts_data = facts.load_facts("data.example/facts.example.yaml")
+    content = build_cv_content(facts_data, track_id=track)
+
+    try:
+        pdf_path = render_cv(content, output_path)
+    except RenderError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Rendered {pdf_path}")
+
+    ats_result = check_ats(pdf_path, content)
+    typer.echo(f"ATS checks: {'OK' if ats_result.ok else 'FAILED'}")
+    for problem in ats_result.problems:
+        typer.echo(f"  - {problem}")
+
+    try:
+        resume = run_openresume_parser(pdf_path)
+        typer.echo("OpenResume parser extracted fields (informational, not a pass/fail gate):")
+        typer.echo(json.dumps(resume, indent=2, ensure_ascii=False))
+    except OpenResumeCheckError as exc:
+        typer.echo(f"OpenResume parser check skipped: {exc}", err=True)
+
+    if not ats_result.ok:
+        raise typer.Exit(code=1)
 
 
 def _load_facts_summary_for_eval() -> str:

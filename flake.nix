@@ -17,6 +17,9 @@
             python312
             uv
             ruff
+            typst
+            nodejs_22
+            dejavu_fonts
           ];
 
           # Manylinux wheels (numpy, pandas, ...) pulled in by uv expect these
@@ -28,6 +31,10 @@
 
           shellHook = ''
             export UV_PYTHON=${pkgs.python312}/bin/python3
+            # DejaVu Sans covers Latin + Cyrillic (PROJECT.md §8) -- pin it
+            # explicitly rather than relying on whatever fonts the host
+            # happens to have installed system-wide.
+            export TYPST_FONT_PATHS="${pkgs.dejavu_fonts}/share/fonts/truetype"
           '';
         };
       });

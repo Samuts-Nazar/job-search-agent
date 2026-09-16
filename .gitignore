@@ -19,7 +19,7 @@ __pycache__/
 .venv/
 venv/
 
-# Node (OpenResume check tooling, Phase 2)
+# Node (OpenResume check tooling, src/job_agent/cv/openresume/)
 node_modules/
 
 # uv

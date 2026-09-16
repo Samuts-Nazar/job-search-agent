@@ -1,0 +1,13 @@
+{
+  "name": "job-agent-openresume-check",
+  "private": true,
+  "type": "module",
+  "description": "Runs the OpenResume parser (vendored, see NOTICE.md) against a rendered CV PDF for job render-test.",
+  "dependencies": {
+    "pdfjs-dist": "^6.3.289"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.4"
+  }
+}
