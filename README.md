@@ -57,10 +57,31 @@ and must be avoided or the setting must be re-checked.
 ```
 uv run job              # full pipeline run, then stays up for Telegram interaction (Ctrl+C to stop)
 uv run job eval         # compare models in config.yaml -> models.eval_candidates
-uv run job stats        # print pipeline/spend stats
+uv run job stats        # print pipeline/spend stats + extended aggregates (skills, reply rate, salary, ...)
 uv run job check-data   # validate data/facts.yaml and data/answers.yaml (also run before every `job`)
 uv run job render-test  # render the CV template against data.example content, run ATS + OpenResume checks
+uv run job export       # dump postings/scores/applications to CSV in output/export/ for outside analysis
 ```
+
+## Data collected beyond the fit score
+
+Scoring also extracts posting metadata that doesn't affect pipeline
+behavior yet, purely so it's there for later analysis: tech stack,
+required years of experience, stated seniority level, work format,
+country, and a salary breakdown (min/max/currency/period). Every one of
+these fields is optional -- the model never fails validation for not
+finding one. The apply/company URL is also checked against a small list of
+known ATS domains (Greenhouse, Lever, Workable, Teamtailor, ...; see
+`ats_vendor.py`) with no network request.
+
+Postings dropped by the prefilter keep the reason (`filtered_reason`:
+`category_not_allowed` or `seniority_stopword:<word>` / `seniority_years:<n>`)
+instead of just a bare "filtered_out" status. Every scored posting's full
+result is stored regardless of whether it's above threshold.
+
+An `applications` table (plus a status-history table) exists for Phase
+3's form-fill/submission flow to write into later -- nothing in Phase 1/2
+creates rows there yet.
 
 ## Adding a source
 

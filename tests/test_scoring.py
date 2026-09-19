@@ -20,6 +20,15 @@ VALID_RESULT = ScoringResult(
     salary=None,
     recommended_cv_track="qa_automation",
     rationale="Strong match.",
+    tech_stack=["Python", "AWS"],
+    required_years_experience=3.0,
+    seniority_level="middle",
+    work_format="remote",
+    country="Ukraine",
+    salary_min=2000.0,
+    salary_max=3000.0,
+    salary_currency="USD",
+    salary_period="month",
 )
 
 
@@ -92,6 +101,15 @@ def test_score_posting_success_on_first_attempt(monkeypatch, conn, config, posti
     assert row["fit_score"] == 80
     assert row["verdict"] == "apply"
     assert json.loads(row["matched_skills"]) == ["Python"]
+    assert json.loads(row["tech_stack"]) == ["Python", "AWS"]
+    assert row["required_years_experience"] == 3.0
+    assert row["seniority_level"] == "middle"
+    assert row["work_format"] == "remote"
+    assert row["country"] == "Ukraine"
+    assert row["salary_min"] == 2000.0
+    assert row["salary_max"] == 3000.0
+    assert row["salary_currency"] == "USD"
+    assert row["salary_period"] == "month"
 
     calls = conn.execute("SELECT * FROM llm_calls").fetchall()
     assert len(calls) == 1

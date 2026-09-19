@@ -111,6 +111,15 @@ def score_posting(
                 relocation_offered=scoring_result.relocation_offered,
                 recommended_cv_track=scoring_result.recommended_cv_track,
                 rationale=scoring_result.rationale,
+                tech_stack=json.dumps(scoring_result.tech_stack),
+                required_years_experience=scoring_result.required_years_experience,
+                seniority_level=scoring_result.seniority_level,
+                work_format=scoring_result.work_format,
+                country=scoring_result.country,
+                salary_min=scoring_result.salary_min,
+                salary_max=scoring_result.salary_max,
+                salary_currency=scoring_result.salary_currency,
+                salary_period=scoring_result.salary_period,
             )
             return scoring_result
 

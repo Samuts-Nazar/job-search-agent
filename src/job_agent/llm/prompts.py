@@ -19,7 +19,7 @@ def load_prompt_template(name: str) -> Template:
 
 
 def render_scoring_prompt(*, facts_summary: str, posting: Posting) -> str:
-    template = load_prompt_template("scoring_v1")
+    template = load_prompt_template("scoring_v2")
     return template.substitute(
         facts_summary=facts_summary,
         source=posting.source,

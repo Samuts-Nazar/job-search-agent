@@ -75,7 +75,22 @@ def test_prefilter_postings_splits_kept_and_filtered_out():
         postings, categories=["QA"], seniority_strict=True
     )
     assert [p.url for p in kept] == ["https://djinni.co/jobs/1/"]
-    assert {p.url for p in filtered_out} == {
-        "https://djinni.co/jobs/2/",
-        "https://djinni.co/jobs/3/",
-    }
+    filtered_by_url = {p.url: reason for p, reason in filtered_out}
+    assert filtered_by_url["https://djinni.co/jobs/2/"] == "seniority_stopword:senior"
+    assert filtered_by_url["https://djinni.co/jobs/3/"] == "category_not_allowed"
+
+
+def test_seniority_reject_reason_distinguishes_stopword_and_years():
+    stopword_posting = make_posting(title="Senior QA Engineer")
+    years_posting = make_posting(description="Requires 7 years of experience.")
+    assert (
+        prefilter._seniority_reject_reason(stopword_posting, seniority_strict=True)
+        == "seniority_stopword:senior"
+    )
+    assert (
+        prefilter._seniority_reject_reason(years_posting, seniority_strict=True)
+        == "seniority_years:7"
+    )
+    assert (
+        prefilter._seniority_reject_reason(make_posting(), seniority_strict=True) is None
+    )

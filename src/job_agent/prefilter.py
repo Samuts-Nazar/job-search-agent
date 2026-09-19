@@ -37,18 +37,25 @@ def passes_category_allowlist(posting: Posting, allowed_categories: list[str]) -
     return bool(allowed & tags)
 
 
-def passes_seniority_filter(posting: Posting, *, seniority_strict: bool) -> bool:
+def _seniority_reject_reason(posting: Posting, *, seniority_strict: bool) -> str | None:
+    """None if the posting passes; otherwise a specific machine-readable reason."""
     stopwords, years_threshold = _stopwords_for(seniority_strict)
     haystack = f"{posting.title}\n{posting.description}".lower()
 
-    if any(word in haystack for word in stopwords):
-        return False
+    for word in stopwords:
+        if word in haystack:
+            return f"seniority_stopword:{word}"
 
     for match in _YEARS_PATTERN.finditer(haystack):
-        if int(match.group(1)) >= years_threshold:
-            return False
+        years = int(match.group(1))
+        if years >= years_threshold:
+            return f"seniority_years:{years}"
 
-    return True
+    return None
+
+
+def passes_seniority_filter(posting: Posting, *, seniority_strict: bool) -> bool:
+    return _seniority_reject_reason(posting, seniority_strict=seniority_strict) is None
 
 
 def prefilter_postings(
@@ -56,17 +63,18 @@ def prefilter_postings(
     *,
     categories: list[str],
     seniority_strict: bool,
-) -> tuple[list[Posting], list[Posting]]:
-    """Split postings into (kept, filtered_out)."""
+) -> tuple[list[Posting], list[tuple[Posting, str]]]:
+    """Split postings into (kept, filtered_out_with_reason)."""
     kept: list[Posting] = []
-    filtered_out: list[Posting] = []
+    filtered_out: list[tuple[Posting, str]] = []
 
     for posting in postings:
         if not passes_category_allowlist(posting, categories):
-            filtered_out.append(posting)
+            filtered_out.append((posting, "category_not_allowed"))
             continue
-        if not passes_seniority_filter(posting, seniority_strict=seniority_strict):
-            filtered_out.append(posting)
+        reason = _seniority_reject_reason(posting, seniority_strict=seniority_strict)
+        if reason is not None:
+            filtered_out.append((posting, reason))
             continue
         kept.append(posting)
 

@@ -9,7 +9,18 @@ import sqlite3
 import typer
 from pydantic import ValidationError
 
-from job_agent import data_guard, db, dedup, facts, prefilter, scoring, telegram_bot
+from job_agent import (
+    ats_vendor,
+    data_guard,
+    db,
+    dedup,
+    facts,
+    prefilter,
+    scoring,
+    stats_report,
+    telegram_bot,
+)
+from job_agent import export as export_module
 from job_agent.config import Config, Secrets, load_config, load_secrets
 from job_agent.db import Posting
 from job_agent.llm.client import make_client
@@ -58,19 +69,24 @@ def run_pipeline(
     new_postings = dedup.dedup_new_postings(conn, raw_postings)
     typer.echo(f"{len(new_postings)} new after dedup.")
 
+    for posting in new_postings:
+        posting.ats_vendor = ats_vendor.detect_ats_vendor(posting.url)
+
     inserted: list[tuple[int, Posting]] = [
         (db.insert_posting(conn, posting), posting) for posting in new_postings
     ]
 
-    kept, _filtered_out = prefilter.prefilter_postings(
+    kept, filtered_out = prefilter.prefilter_postings(
         [posting for _, posting in inserted],
         categories=config.categories,
         seniority_strict=config.active_threshold.seniority_strict,
     )
     kept_urls = {posting.canonical_url for posting in kept}
+    filtered_reasons = {posting.canonical_url: reason for posting, reason in filtered_out}
     for posting_id, posting in inserted:
-        if posting.canonical_url not in kept_urls:
-            db.update_posting_status(conn, posting_id, "filtered_out")
+        reason = filtered_reasons.get(posting.canonical_url)
+        if reason is not None:
+            db.update_posting_status(conn, posting_id, "filtered_out", filtered_reason=reason)
 
     typer.echo(f"{len(kept)} passed prefilter, scoring...")
 
@@ -183,7 +199,7 @@ def main(
 
 @app.command()
 def stats(db_path: str = typer.Option(DEFAULT_DB_PATH, "--db")) -> None:
-    """Print pipeline/spend stats."""
+    """Print pipeline/spend stats, plus extended aggregates (skills, reply rate, salary, etc.)."""
     conn = db.connect(db_path)
     db.init_db(conn)
     try:
@@ -191,8 +207,30 @@ def stats(db_path: str = typer.Option(DEFAULT_DB_PATH, "--db")) -> None:
             db.status_counts(conn), db.source_counts(conn), db.total_cost_usd(conn)
         )
         typer.echo(text.replace("<b>", "").replace("</b>", ""))
+        typer.echo(stats_report.format_extended_stats(conn))
     finally:
         conn.close()
+
+
+@app.command()
+def export(
+    out_dir: str = typer.Option("output/export", "--out-dir"),
+    fmt: str = typer.Option("csv", "--format"),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+) -> None:
+    """Export postings, scores, and applications for analysis outside the tool."""
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    try:
+        counts = export_module.export_all(conn, out_dir, fmt=fmt)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    finally:
+        conn.close()
+
+    for name, count in counts.items():
+        typer.echo(f"{name}: {count} rows -> {out_dir}/{name}.{fmt}")
 
 
 @app.command(name="check-data")

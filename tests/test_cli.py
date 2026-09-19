@@ -119,9 +119,17 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
     assert scored_rows[0]["title"] == "QA Engineer"
 
     filtered_row = conn.execute(
-        "SELECT status FROM postings WHERE title = 'Senior QA Architect'"
+        "SELECT status, filtered_reason FROM postings WHERE title = 'Senior QA Architect'"
     ).fetchone()
     assert filtered_row["status"] == "filtered_out"
+    # config fixture uses wide mode (seniority_strict=False) -> only the
+    # relaxed stopwords apply, and "senior" isn't one of them
+    assert filtered_row["filtered_reason"] == "seniority_stopword:architect"
+
+    scored_row = conn.execute(
+        "SELECT ats_vendor FROM postings WHERE title = 'QA Engineer'"
+    ).fetchone()
+    assert scored_row["ats_vendor"] is None  # https://a/1 isn't a known ATS domain
 
 
 class _NullContextClient:
@@ -138,6 +146,8 @@ def test_stats_command_runs_on_empty_db(tmp_path):
     assert result.exit_code == 0
     assert "Stats" in result.stdout
     assert "LLM spend" in result.stdout
+    assert "Extended stats" in result.stdout
+    assert "Most frequent missing skills" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("typst") is None, reason="typst CLI not on PATH")
@@ -242,3 +252,33 @@ def test_main_refuses_to_run_with_example_data(tmp_path):
     assert result.exit_code == 1
     assert "Refusing to run" in result.output
     assert "candidate.email" in result.output
+
+
+def test_export_command_writes_csv_files(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    out_dir = tmp_path / "export"
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    posting = make_posting()
+    posting.canonical_url = posting.url
+    posting.dedup_hash = "hash1"
+    db.insert_posting(conn, posting)
+    conn.close()
+
+    result = runner.invoke(
+        cli.app, ["export", "--db", str(db_path), "--out-dir", str(out_dir)]
+    )
+
+    assert result.exit_code == 0
+    assert (out_dir / "postings.csv").exists()
+    assert (out_dir / "scores.csv").exists()
+    assert (out_dir / "applications.csv").exists()
+    assert "postings: 1 rows" in result.output
+
+
+def test_export_command_rejects_unsupported_format(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    result = runner.invoke(
+        cli.app, ["export", "--db", str(db_path), "--format", "json"]
+    )
+    assert result.exit_code == 1
