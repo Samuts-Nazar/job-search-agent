@@ -82,3 +82,11 @@ JSON-schema validity rate, latency, and cost are acceptable.
 uv run pytest
 uv run ruff check .
 ```
+
+## License
+
+This project's own code is all rights reserved, (c) Nazar Samuts.
+
+`src/job_agent/cv/openresume/` is third-party code under the GNU Affero
+General Public License v3.0 -- see the `LICENSE` and `NOTICE.md` files in
+that directory for exact provenance and licensing.
