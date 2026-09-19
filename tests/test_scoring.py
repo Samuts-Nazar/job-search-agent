@@ -65,10 +65,10 @@ def posting_id(conn, posting):
 
 
 def test_score_posting_success_on_first_attempt(monkeypatch, conn, config, posting, posting_id):
-    def fake_attempt_score(client, *, model, facts_summary, posting):
+    def fake_attempt_score(client, *, model_entry, facts_summary, posting, reasoning_overrides):
         completion = CompletionResult(
             raw_content=VALID_RESULT.model_dump_json(),
-            model=model,
+            model=model_entry.id,
             input_tokens=100,
             output_tokens=50,
             cost_usd=0.002,
@@ -104,13 +104,13 @@ def test_score_posting_falls_back_after_retries_exhausted(
 ):
     attempts = []
 
-    def fake_attempt_score(client, *, model, facts_summary, posting):
-        attempts.append(model)
-        if model == "primary/model":
+    def fake_attempt_score(client, *, model_entry, facts_summary, posting, reasoning_overrides):
+        attempts.append(model_entry.id)
+        if model_entry.id == "primary/model":
             raise OpenRouterError("bad json")
         completion = CompletionResult(
             raw_content=VALID_RESULT.model_dump_json(),
-            model=model,
+            model=model_entry.id,
             input_tokens=10,
             output_tokens=5,
             cost_usd=0.001,
@@ -139,7 +139,7 @@ def test_score_posting_falls_back_after_retries_exhausted(
 def test_score_posting_marks_score_failed_when_all_models_fail(
     monkeypatch, conn, config, posting, posting_id
 ):
-    def fake_attempt_score(client, *, model, facts_summary, posting):
+    def fake_attempt_score(client, *, model_entry, facts_summary, posting, reasoning_overrides):
         raise OpenRouterError("always fails")
 
     monkeypatch.setattr(scoring, "_attempt_score", fake_attempt_score)
@@ -158,3 +158,54 @@ def test_score_posting_marks_score_failed_when_all_models_fail(
     assert row["status"] == "score_failed"
     assert row["score_failed_reason"]
     assert conn.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
+
+
+def test_attempt_score_records_reasoning_fallback_for_later_calls(monkeypatch):
+    from job_agent.config import ModelEntry
+
+    calls = []
+
+    def fake_complete_structured(client, payload):
+        calls.append(dict(payload))
+        return CompletionResult(
+            raw_content=VALID_RESULT.model_dump_json(),
+            model=payload["model"],
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd=0.001,
+            # Simulate complete_structured having already done its own
+            # internal 400-then-retry-without-reasoning dance.
+            reasoning_fallback_used="reasoning" in payload,
+        )
+
+    monkeypatch.setattr(scoring, "complete_structured", fake_complete_structured)
+
+    posting = db.Posting(
+        source="djinni",
+        url="https://djinni.co/jobs/1/",
+        title="QA Automation Engineer",
+        description="desc",
+    )
+    model_entry = ModelEntry(id="strict/model", reasoning="none")
+    overrides: dict[str, str | None] = {}
+
+    # First call: default reasoning sent, client reports a fallback was used.
+    scoring._attempt_score(
+        object(),
+        model_entry=model_entry,
+        facts_summary="facts",
+        posting=posting,
+        reasoning_overrides=overrides,
+    )
+    assert "reasoning" in calls[0]
+    assert overrides == {"strict/model": None}
+
+    # Second call: the cached override means no `reasoning` key is sent at all.
+    scoring._attempt_score(
+        object(),
+        model_entry=model_entry,
+        facts_summary="facts",
+        posting=posting,
+        reasoning_overrides=overrides,
+    )
+    assert "reasoning" not in calls[1]

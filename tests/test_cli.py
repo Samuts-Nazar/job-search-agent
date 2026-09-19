@@ -93,7 +93,9 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
         rationale="Good fit.",
     )
 
-    def fake_score_posting(conn_, client, *, posting_id, posting, config, facts_summary):
+    def fake_score_posting(
+        conn_, client, *, posting_id, posting, config, facts_summary, reasoning_overrides=None
+    ):
         db.update_posting_status(
             conn_,
             posting_id,

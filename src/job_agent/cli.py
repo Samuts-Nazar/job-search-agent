@@ -78,6 +78,7 @@ def run_pipeline(
     facts_summary = facts.render_facts_summary(facts_data)
 
     scored_rows: list[sqlite3.Row] = []
+    reasoning_overrides: dict[str, str | None] = {}
     with make_client(secrets.openrouter_api_key) as client:
         for posting_id, posting in inserted:
             if posting.canonical_url not in kept_urls:
@@ -89,6 +90,7 @@ def run_pipeline(
                 posting=posting,
                 config=config,
                 facts_summary=facts_summary,
+                reasoning_overrides=reasoning_overrides,
             )
             row = db.get_posting(conn, posting_id)
             if row is not None and row["status"] == "scored":

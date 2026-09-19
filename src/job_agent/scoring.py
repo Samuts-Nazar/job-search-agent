@@ -13,7 +13,7 @@ import httpx
 from pydantic import ValidationError
 
 from job_agent import db
-from job_agent.config import Config
+from job_agent.config import Config, ModelEntry
 from job_agent.db import Posting
 from job_agent.llm.client import (
     CompletionResult,
@@ -30,17 +30,26 @@ SYSTEM_PROMPT = "You are a precise, conservative job-fit scorer."
 
 
 def _attempt_score(
-    client: httpx.Client, *, model: str, facts_summary: str, posting: Posting
+    client: httpx.Client,
+    *,
+    model_entry: ModelEntry,
+    facts_summary: str,
+    posting: Posting,
+    reasoning_overrides: dict[str, str | None],
 ) -> tuple[ScoringResult, CompletionResult]:
+    reasoning = reasoning_overrides.get(model_entry.id, model_entry.reasoning_effort)
     user_prompt = render_scoring_prompt(facts_summary=facts_summary, posting=posting)
     payload = build_structured_payload(
-        model=model,
+        model=model_entry.id,
         system_prompt=SYSTEM_PROMPT,
         user_prompt=user_prompt,
         json_schema=SCORING_JSON_SCHEMA,
         schema_name="posting_score",
+        reasoning=reasoning,
     )
     completion = complete_structured(client, payload)
+    if completion.reasoning_fallback_used and model_entry.id not in reasoning_overrides:
+        reasoning_overrides[model_entry.id] = None
     data = parse_json_content(completion.raw_content)
     return ScoringResult.model_validate(data), completion
 
@@ -53,18 +62,26 @@ def score_posting(
     posting: Posting,
     config: Config,
     facts_summary: str,
+    reasoning_overrides: dict[str, str | None] | None = None,
 ) -> ScoringResult | None:
+    """`reasoning_overrides` should be created once per pipeline run and
+    passed into every score_posting() call -- once a model is found to
+    reject an explicit reasoning effort (see llm/client.py), later calls
+    for that same model id skip straight to omitting the param."""
+    if reasoning_overrides is None:
+        reasoning_overrides = {}
     models_to_try = [config.models.bulk, *config.models.fallbacks.bulk]
     last_error: Exception | None = None
 
-    for model in models_to_try:
+    for model_entry in models_to_try:
         for _attempt in range(MAX_RETRIES_PER_MODEL + 1):
             try:
                 scoring_result, completion = _attempt_score(
                     client,
-                    model=model,
+                    model_entry=model_entry,
                     facts_summary=facts_summary,
                     posting=posting,
+                    reasoning_overrides=reasoning_overrides,
                 )
             except (OpenRouterError, ValidationError, httpx.HTTPError) as exc:
                 last_error = exc

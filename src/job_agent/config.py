@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Mode = Literal["wide", "selective"]
+
+# OpenRouter reasoning.effort values (verified live 2026-09-16), plus "omit"
+# -- our own sentinel meaning "send no reasoning param at all" (some
+# endpoints, e.g. z-ai/glm-5.3-flash, reject an explicit effort and require
+# the param to be absent; see llm/client.py's reasoning-mandatory fallback).
+ReasoningSetting = Literal["none", "minimal", "low", "medium", "high", "omit"]
 
 
 class ThresholdConfig(BaseModel):
@@ -18,16 +24,36 @@ class ThresholdConfig(BaseModel):
     seniority_strict: bool = False
 
 
+class ModelEntry(BaseModel):
+    id: str
+    reasoning: ReasoningSetting = "none"
+
+    @property
+    def reasoning_effort(self) -> str | None:
+        return None if self.reasoning == "omit" else self.reasoning
+
+
+def _coerce_model_entry(value: Any) -> Any:
+    """Allows config.yaml to write a plain model-id string as shorthand for
+    `{id: <string>}` (default reasoning: "none")."""
+    if isinstance(value, str):
+        return {"id": value}
+    return value
+
+
+ModelEntryField = Annotated[ModelEntry, BeforeValidator(_coerce_model_entry)]
+
+
 class FallbacksConfig(BaseModel):
-    bulk: list[str] = Field(default_factory=list)
-    quality: list[str] = Field(default_factory=list)
+    bulk: list[ModelEntryField] = Field(default_factory=list)
+    quality: list[ModelEntryField] = Field(default_factory=list)
 
 
 class ModelsConfig(BaseModel):
-    bulk: str
-    quality: str
+    bulk: ModelEntryField
+    quality: ModelEntryField
     fallbacks: FallbacksConfig = Field(default_factory=FallbacksConfig)
-    eval_candidates: list[str] = Field(default_factory=list)
+    eval_candidates: list[ModelEntryField] = Field(default_factory=list)
 
 
 class DjinniSourceConfig(BaseModel):

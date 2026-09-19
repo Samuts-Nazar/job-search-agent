@@ -17,16 +17,36 @@ models:
   # Model IDs are OpenRouter slugs, verified live against
   # https://openrouter.ai/api/v1/models on 2026-09-16 -- re-check before relying
   # on them, IDs and availability change often.
+  #
+  # Each entry may be a plain id string (default reasoning: "none") or
+  # {id, reasoning}. reasoning is one of none/minimal/low/medium/high/omit
+  # -- "omit" sends no `reasoning` param at all, which some endpoints
+  # require (verified live 2026-09-19: z-ai/glm-5.3-flash 400s with
+  # "Reasoning is mandatory for this endpoint and cannot be disabled." if
+  # any effort is sent, explicit or "none"). The client also auto-detects
+  # this per-model at runtime and retries once without the param -- the
+  # explicit `omit` here just skips that wasted first attempt.
   bulk: "deepseek/deepseek-v4.1-flash"   # cheap, high-volume scoring (job_agent.scoring)
   quality: "anthropic/claude-haiku-4.5"  # CV edits, cover letters, outreach drafts (Phase 2+)
   fallbacks:
-    bulk: ["z-ai/glm-5.3-flash", "qwen/qwen3.8-flash"]
+    bulk:
+      - id: "z-ai/glm-5.3-flash"
+        reasoning: omit
+      - "qwen/qwen3.8-flash"
     quality: ["z-ai/glm-5.3"]
   eval_candidates:      # models compared by `job eval`; see PROJECT.md §7 / README
-    - "z-ai/glm-5.3-flash"
+    - id: "z-ai/glm-5.3-flash"
+      reasoning: omit
     - "deepseek/deepseek-v4.1-flash"
     - "qwen/qwen3.8-flash"
-    - "google/gemma-4-26b-a4b-it"   # paid variant; the :free variant has no structured-output support
+    - "google/gemma-4-26b-a4b-it"
+    # The :free variant of gemma-4-26b-a4b-it is NOT usable for this
+    # pipeline: verified live 2026-09-19, it 429'd on every single request
+    # (100% failure) with `limit_source: upstream_provider_shared_pool` --
+    # Google AI Studio's shared free-tier capacity for this model is
+    # congested account-wide across ALL OpenRouter users, independent of
+    # our own request pace (we were already throttled to <=1 req/3.1s).
+    # Only the paid variant above is a real eval candidate.
 
 sources:
   djinni:

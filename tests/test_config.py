@@ -14,7 +14,9 @@ models:
   bulk: "some/cheap-model"
   quality: "some/strong-model"
   fallbacks:
-    bulk: ["some/cheap-fallback"]
+    bulk:
+      - id: "some/cheap-fallback"
+        reasoning: omit
     quality: []
   eval_candidates: ["some/cheap-model", "some/strong-model"]
 sources:
@@ -39,8 +41,16 @@ def test_load_config_parses_example_file(tmp_path):
     assert config.mode == "wide"
     assert config.active_threshold.fit_score_min == 40
     assert config.thresholds["selective"].seniority_strict is True
-    assert config.models.bulk == "some/cheap-model"
-    assert config.models.fallbacks.bulk == ["some/cheap-fallback"]
+    assert config.models.bulk.id == "some/cheap-model"
+    assert config.models.bulk.reasoning == "none"  # default
+    assert config.models.bulk.reasoning_effort == "none"
+    assert config.models.fallbacks.bulk[0].id == "some/cheap-fallback"
+    assert config.models.fallbacks.bulk[0].reasoning == "omit"
+    assert config.models.fallbacks.bulk[0].reasoning_effort is None
+    assert [m.id for m in config.models.eval_candidates] == [
+        "some/cheap-model",
+        "some/strong-model",
+    ]
     assert config.sources.djinni.categories == ["QA", "Python"]
     assert config.sources.linkedin.enabled is False
     assert config.sources.remoteok.enabled is True  # default
