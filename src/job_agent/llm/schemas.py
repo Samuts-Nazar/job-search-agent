@@ -13,6 +13,11 @@ extracts as a side effect of reading the full posting text -- purely
 additive data collection (PROJECT.md-adjacent, not used to change pipeline
 behavior yet): every one of these is nullable/defaults to empty so a model
 that can't determine a value never fails validation.
+
+Note: seniority_label duplicates seniority_level (both are "the posting's
+own stated level, as written") -- added because it was requested by name
+in a later data-collection pass; kept as a separate field rather than
+silently dropped, but the two should probably be consolidated later.
 """
 
 from __future__ import annotations
@@ -24,6 +29,13 @@ from pydantic import BaseModel, Field
 Verdict = Literal["apply", "maybe", "skip"]
 SeniorityMatch = Literal["under", "match", "over"]
 RelocationOffered = Literal["yes", "no", "unknown"]
+TechTagPriority = Literal["required", "nice_to_have"]
+PortfolioExpected = Literal["github", "portfolio", "test_task", "none"]
+
+
+class TechTag(BaseModel):
+    tag: str
+    priority: TechTagPriority
 
 
 class ScoringResult(BaseModel):
@@ -52,6 +64,22 @@ class ScoringResult(BaseModel):
     salary_currency: str | None = None
     salary_period: str | None = None  # "hour" / "day" / "month" / "year"
 
+    # Second data-collection pass.
+    tech_tags: list[TechTag] = Field(default_factory=list)
+    portfolio_expected: PortfolioExpected | None = None
+    company_type: str | None = None  # e.g. "product" / "outsource" / "agency" / "startup"
+    seniority_label: str | None = None  # see module docstring re: overlap with seniority_level
+
+
+_TECH_TAG_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tag": {"type": "string"},
+        "priority": {"type": "string", "enum": ["required", "nice_to_have"]},
+    },
+    "required": ["tag", "priority"],
+    "additionalProperties": False,
+}
 
 SCORING_JSON_SCHEMA: dict = {
     "type": "object",
@@ -77,6 +105,13 @@ SCORING_JSON_SCHEMA: dict = {
         "salary_max": {"type": ["number", "null"]},
         "salary_currency": {"type": ["string", "null"]},
         "salary_period": {"type": ["string", "null"]},
+        "tech_tags": {"type": "array", "items": _TECH_TAG_SCHEMA},
+        "portfolio_expected": {
+            "type": ["string", "null"],
+            "enum": ["github", "portfolio", "test_task", "none", None],
+        },
+        "company_type": {"type": ["string", "null"]},
+        "seniority_label": {"type": ["string", "null"]},
     },
     "required": [
         "fit_score",
@@ -100,6 +135,10 @@ SCORING_JSON_SCHEMA: dict = {
         "salary_max",
         "salary_currency",
         "salary_period",
+        "tech_tags",
+        "portfolio_expected",
+        "company_type",
+        "seniority_label",
     ],
     "additionalProperties": False,
 }

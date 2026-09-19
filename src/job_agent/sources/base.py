@@ -7,6 +7,7 @@ recorded fixtures without any network access.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import feedparser
@@ -47,3 +48,11 @@ def entry_published_at(entry: feedparser.FeedParserDict) -> str | None:
     if not parsed:
         return None
     return datetime(*parsed[:6], tzinfo=UTC).isoformat()
+
+
+def entry_raw_payload(entry: feedparser.FeedParserDict) -> str:
+    """JSON dump of every field feedparser exposed for this entry, so a
+    posting can be re-analyzed later without re-fetching the feed.
+    default=str covers non-JSON-native values (e.g. time.struct_time on
+    the *_parsed fields)."""
+    return json.dumps(dict(entry), default=str, ensure_ascii=False)

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from job_agent.sources.remoteok import parse_remoteok_json
@@ -25,3 +26,12 @@ def test_parse_remoteok_json_no_tags_means_no_filtering():
     postings = parse_remoteok_json(raw, tags=[])
     titles = {p.title for p in postings}
     assert "Junior Payroll Assistant" in titles
+
+
+def test_parse_remoteok_json_captures_raw_payload():
+    raw = FIXTURE.read_text(encoding="utf-8")
+    postings = parse_remoteok_json(raw, tags=[])
+    first = postings[0]
+    assert first.raw_payload is not None
+    payload = json.loads(first.raw_payload)
+    assert payload["position"] == first.title

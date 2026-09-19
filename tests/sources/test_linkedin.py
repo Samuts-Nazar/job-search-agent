@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 
 import pandas as pd
 
@@ -70,6 +71,14 @@ def test_row_to_posting_handles_pandas_nan_for_missing_cells():
     assert posting.published_at is None
     assert posting.salary_raw is None
     assert posting.company is None
+
+
+def test_row_to_posting_captures_raw_payload():
+    posting = linkedin.row_to_posting(SAMPLE_ROWS[0])
+    assert posting.raw_payload is not None
+    payload = json.loads(posting.raw_payload)
+    assert payload["title"] == "Senior QA Automation Engineer"
+    assert payload["date_posted"] == "2026-09-11"  # dt.date stringified via default=str
 
 
 def test_collect_linkedin_for_keyword_uses_scrape_jobs(monkeypatch):

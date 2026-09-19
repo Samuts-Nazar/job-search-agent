@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from job_agent.llm.schemas import ScoringResult
+from job_agent.llm.schemas import ScoringResult, TechTag
 
 VALID = {
     "fit_score": 75,
@@ -92,6 +92,60 @@ def test_scoring_json_schema_lists_every_field_as_required_and_nullable():
         "salary_max",
         "salary_currency",
         "salary_period",
+        "tech_tags",
+        "portfolio_expected",
+        "company_type",
+        "seniority_label",
     ):
         assert field in SCORING_JSON_SCHEMA["required"]
         assert field in SCORING_JSON_SCHEMA["properties"]
+
+
+def test_scoring_result_second_pass_fields_default_when_omitted():
+    result = ScoringResult.model_validate(VALID)
+    assert result.tech_tags == []
+    assert result.portfolio_expected is None
+    assert result.company_type is None
+    assert result.seniority_label is None
+
+
+def test_scoring_result_accepts_tech_tags():
+    result = ScoringResult.model_validate(
+        {
+            **VALID,
+            "tech_tags": [
+                {"tag": "Python", "priority": "required"},
+                {"tag": "Docker", "priority": "nice_to_have"},
+            ],
+        }
+    )
+    assert result.tech_tags == [
+        TechTag(tag="Python", priority="required"),
+        TechTag(tag="Docker", priority="nice_to_have"),
+    ]
+
+
+def test_scoring_result_rejects_invalid_tech_tag_priority():
+    with pytest.raises(ValidationError):
+        ScoringResult.model_validate(
+            {**VALID, "tech_tags": [{"tag": "Python", "priority": "sometimes"}]}
+        )
+
+
+def test_scoring_result_accepts_portfolio_expected_values():
+    for value in ("github", "portfolio", "test_task", "none"):
+        result = ScoringResult.model_validate({**VALID, "portfolio_expected": value})
+        assert result.portfolio_expected == value
+
+
+def test_scoring_result_rejects_unknown_portfolio_expected():
+    with pytest.raises(ValidationError):
+        ScoringResult.model_validate({**VALID, "portfolio_expected": "resume"})
+
+
+def test_scoring_result_accepts_company_type_and_seniority_label():
+    result = ScoringResult.model_validate(
+        {**VALID, "company_type": "outsource", "seniority_label": "Middle"}
+    )
+    assert result.company_type == "outsource"
+    assert result.seniority_label == "Middle"

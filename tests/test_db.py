@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from job_agent import db
@@ -315,3 +317,172 @@ def test_median_days_to_first_reply(conn):
 
 def test_median_days_to_first_reply_none_when_no_data(conn):
     assert db.median_days_to_first_reply(conn) is None
+
+
+# --- raw_payload / get_all_postings ---------------------------------------
+
+
+def test_insert_posting_stores_raw_payload(conn):
+    posting_id = db.insert_posting(conn, make_posting(raw_payload='{"title": "raw"}'))
+    row = db.get_posting(conn, posting_id)
+    assert row["raw_payload"] == '{"title": "raw"}'
+
+
+def test_get_all_postings(conn):
+    db.insert_posting(conn, make_posting())
+    db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    assert len(db.get_all_postings(conn)) == 2
+    assert len(db.get_all_postings(conn, limit=1)) == 1
+
+
+# --- scoring_runs ----------------------------------------------------------
+
+
+def test_insert_scoring_run_and_get_for_posting(conn):
+    posting_id = db.insert_posting(conn, make_posting())
+    run_id = db.insert_scoring_run(
+        conn,
+        posting_id=posting_id,
+        model="test/model",
+        prompt_version="scoring_v3",
+        input_tokens=100,
+        output_tokens=50,
+        cost_usd=0.001,
+        fit_score=80,
+        verdict="apply",
+    )
+    assert run_id > 0
+
+    runs = db.get_scoring_runs_for_posting(conn, posting_id)
+    assert len(runs) == 1
+    assert runs[0]["model"] == "test/model"
+    assert runs[0]["prompt_version"] == "scoring_v3"
+    assert runs[0]["fit_score"] == 80
+    assert runs[0]["verdict"] == "apply"
+
+
+def test_scoring_runs_accumulate_across_rescores(conn):
+    posting_id = db.insert_posting(conn, make_posting())
+    db.insert_scoring_run(
+        conn, posting_id=posting_id, model="model-a", prompt_version="scoring_v2", fit_score=50
+    )
+    db.insert_scoring_run(
+        conn, posting_id=posting_id, model="model-b", prompt_version="scoring_v3", fit_score=60
+    )
+
+    runs = db.get_scoring_runs_for_posting(conn, posting_id)
+    assert len(runs) == 2
+    assert [r["model"] for r in runs] == ["model-a", "model-b"]
+
+    # inserting scoring_runs must not touch the posting's own primary columns
+    row = db.get_posting(conn, posting_id)
+    assert row["fit_score"] is None
+    assert row["status"] == "new"
+
+
+# --- tech_tags aggregates ---------------------------------------------------
+
+
+def _score_with_tech_tags(conn, posting_id, tech_tags, **extra):
+    db.update_posting_status(
+        conn, posting_id, "scored", tech_tags=json.dumps(tech_tags), **extra
+    )
+
+
+def test_tech_tag_cooccurrence(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    _score_with_tech_tags(
+        conn,
+        id1,
+        [
+            {"tag": "Python", "priority": "required"},
+            {"tag": "AWS", "priority": "nice_to_have"},
+            {"tag": "Docker", "priority": "required"},
+        ],
+    )
+    _score_with_tech_tags(
+        conn,
+        id2,
+        [{"tag": "Python", "priority": "required"}, {"tag": "AWS", "priority": "required"}],
+    )
+
+    cooccurrence = db.tech_tag_cooccurrence(conn)
+    pairs = dict(cooccurrence["pairs"])
+    assert pairs[("AWS", "Python")] == 2
+    assert pairs[("Docker", "Python")] == 1
+    triples = dict(cooccurrence["triples"])
+    assert triples[("AWS", "Docker", "Python")] == 1
+
+
+def test_tech_tag_stats(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    _score_with_tech_tags(
+        conn,
+        id1,
+        [{"tag": "Python", "priority": "required"}],
+        salary_min=2000.0,
+        salary_max=2000.0,
+        required_years_experience=0.5,
+    )
+    _score_with_tech_tags(
+        conn,
+        id2,
+        [{"tag": "Python", "priority": "nice_to_have"}],
+        salary_min=4000.0,
+        salary_max=4000.0,
+        required_years_experience=5,
+    )
+
+    stats = db.tech_tag_stats(conn)
+    python_stats = stats["Python"]
+    assert python_stats["frequency"] == 2
+    assert python_stats["required_count"] == 1
+    assert python_stats["required_share"] == 0.5
+    assert python_stats["median_salary"] == 3000.0
+    assert python_stats["salary_count"] == 2
+    assert python_stats["junior_count"] == 1
+    assert python_stats["years_count"] == 2
+    assert python_stats["junior_share"] == 0.5
+
+
+def test_tech_tag_monthly_trend(conn):
+    id1 = db.insert_posting(conn, make_posting(published_at="2026-08-15T00:00:00+00:00"))
+    id2 = db.insert_posting(
+        conn,
+        make_posting(
+            canonical_url="https://djinni.co/jobs/2/",
+            dedup_hash="hash2",
+            published_at="2026-09-01T00:00:00+00:00",
+        ),
+    )
+    _score_with_tech_tags(conn, id1, [{"tag": "Python", "priority": "required"}])
+    _score_with_tech_tags(conn, id2, [{"tag": "Python", "priority": "required"}])
+
+    trend = db.tech_tag_monthly_trend(conn)
+    assert trend["Python"] == {"2026-08": 1, "2026-09": 1}
+
+
+def test_portfolio_expectation_stats(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    id3 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/3/", dedup_hash="hash3")
+    )
+    db.update_posting_status(conn, id1, "scored", portfolio_expected="github")
+    db.update_posting_status(conn, id2, "scored", portfolio_expected="github")
+    db.update_posting_status(conn, id3, "scored", portfolio_expected=None)
+
+    stats = db.portfolio_expectation_stats(conn)
+    assert stats["github"] == (2, 3)
+    assert stats["unstated"] == (1, 3)
+    assert stats["portfolio"] == (0, 3)

@@ -11,6 +11,7 @@ a random interval between per-keyword searches.
 
 from __future__ import annotations
 
+import json
 import random
 import time
 from typing import Any
@@ -52,6 +53,7 @@ def row_to_posting(row: dict[str, Any]) -> Posting:
         published_at=date_posted.isoformat() if date_posted else None,
         salary_raw=_salary_raw(row),
         raw_tags=[],
+        raw_payload=json.dumps(row, default=str, ensure_ascii=False),
     )
 
 

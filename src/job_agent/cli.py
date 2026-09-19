@@ -54,6 +54,28 @@ def _count_by_source(postings: list[Posting]) -> dict[str, int]:
     return counts
 
 
+def _posting_from_row(row: sqlite3.Row) -> Posting:
+    """Reconstructs a Posting from a stored postings row -- used by
+    `job analyze --rescore` to re-score from the raw text/payload already
+    on disk, without re-collecting from the source."""
+    return Posting(
+        source=row["source"],
+        url=row["url"],
+        title=row["title"],
+        description=row["description"],
+        company=row["company"],
+        location=row["location"],
+        remote_type=row["remote_type"],
+        published_at=row["published_at"],
+        salary_raw=row["salary_raw"],
+        raw_tags=json.loads(row["raw_tags"] or "[]"),
+        raw_payload=row["raw_payload"],
+        ats_vendor=row["ats_vendor"],
+        canonical_url=row["canonical_url"],
+        dedup_hash=row["dedup_hash"],
+    )
+
+
 def run_pipeline(
     config: Config,
     secrets: Secrets,
@@ -312,6 +334,67 @@ def eval_command(
     facts_summary = _load_facts_summary_for_eval()
     reports = run_eval(config, secrets, facts_summary=facts_summary)
     typer.echo(format_eval_report(reports))
+
+
+@app.command()
+def analyze(
+    rescore: bool = typer.Option(False, "--rescore"),
+    config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+    facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
+    limit: int | None = typer.Option(None, "--limit"),
+) -> None:
+    """Re-run scoring over every stored posting (including previously
+    filtered-out ones) with the current model and prompt version.
+
+    Writes a new scoring_runs row per posting -- the posting's original
+    primary result (status, fit_score, etc.) is left untouched, so this is
+    safe to run repeatedly as models/prompts change without losing history.
+    """
+    if not rescore:
+        typer.echo("Nothing to do -- pass --rescore.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        config = load_config(config_path)
+        secrets = load_secrets(env_path)
+    except FileNotFoundError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    except ValidationError as exc:
+        typer.echo(f"Missing or invalid secrets in {env_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    try:
+        rows = db.get_all_postings(conn, limit=limit)
+        typer.echo(f"Re-scoring {len(rows)} stored postings...")
+
+        facts_data = facts.load_facts(facts_path)
+        facts_summary = facts.render_facts_summary(facts_data)
+
+        rescored = 0
+        reasoning_overrides: dict[str, str | None] = {}
+        with make_client(secrets.openrouter_api_key) as client:
+            for row in rows:
+                posting = _posting_from_row(row)
+                result = scoring.score_posting(
+                    conn,
+                    client,
+                    posting_id=row["id"],
+                    posting=posting,
+                    config=config,
+                    facts_summary=facts_summary,
+                    reasoning_overrides=reasoning_overrides,
+                    record_as_primary=False,
+                )
+                if result is not None:
+                    rescored += 1
+        typer.echo(f"Re-scored {rescored}/{len(rows)} postings (new scoring_runs rows).")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

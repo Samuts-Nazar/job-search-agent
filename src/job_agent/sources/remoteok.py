@@ -54,6 +54,7 @@ def parse_remoteok_json(raw_json: str, *, tags: list[str]) -> list[Posting]:
                 published_at=item.get("date"),
                 salary_raw=_salary_raw(item),
                 raw_tags=item_tags,
+                raw_payload=json.dumps(item, ensure_ascii=False),
             )
         )
     return postings

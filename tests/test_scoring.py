@@ -116,6 +116,75 @@ def test_score_posting_success_on_first_attempt(monkeypatch, conn, config, posti
     assert calls[0]["model"] == "primary/model"
     assert calls[0]["cost_usd"] == 0.002
 
+    runs = db.get_scoring_runs_for_posting(conn, posting_id)
+    assert len(runs) == 1
+    assert runs[0]["model"] == "primary/model"
+    assert runs[0]["prompt_version"] == scoring.SCORING_PROMPT_VERSION
+    assert runs[0]["fit_score"] == 80
+    assert runs[0]["cost_usd"] == 0.002
+    assert json.loads(runs[0]["tech_stack"]) == ["Python", "AWS"]
+
+
+def test_score_posting_record_as_primary_false_only_writes_scoring_run(
+    monkeypatch, conn, config, posting, posting_id
+):
+    def fake_attempt_score(client, *, model_entry, facts_summary, posting, reasoning_overrides):
+        completion = CompletionResult(
+            raw_content=VALID_RESULT.model_dump_json(),
+            model=model_entry.id,
+            input_tokens=10,
+            output_tokens=5,
+            cost_usd=0.001,
+        )
+        return VALID_RESULT, completion
+
+    monkeypatch.setattr(scoring, "_attempt_score", fake_attempt_score)
+
+    result = scoring.score_posting(
+        conn,
+        client=object(),
+        posting_id=posting_id,
+        posting=posting,
+        config=config,
+        facts_summary="facts",
+        record_as_primary=False,
+    )
+
+    assert result == VALID_RESULT
+    # posting's own primary columns/status must be untouched
+    row = db.get_posting(conn, posting_id)
+    assert row["status"] == "new"
+    assert row["fit_score"] is None
+
+    # but a scoring_runs row was written
+    runs = db.get_scoring_runs_for_posting(conn, posting_id)
+    assert len(runs) == 1
+    assert runs[0]["fit_score"] == 80
+
+
+def test_score_posting_record_as_primary_false_does_not_mark_score_failed(
+    monkeypatch, conn, config, posting, posting_id
+):
+    def fake_attempt_score(client, *, model_entry, facts_summary, posting, reasoning_overrides):
+        raise OpenRouterError("always fails")
+
+    monkeypatch.setattr(scoring, "_attempt_score", fake_attempt_score)
+
+    result = scoring.score_posting(
+        conn,
+        client=object(),
+        posting_id=posting_id,
+        posting=posting,
+        config=config,
+        facts_summary="facts",
+        record_as_primary=False,
+    )
+
+    assert result is None
+    row = db.get_posting(conn, posting_id)
+    assert row["status"] == "new"
+    assert row["score_failed_reason"] is None
+
 
 def test_score_posting_falls_back_after_retries_exhausted(
     monkeypatch, conn, config, posting, posting_id

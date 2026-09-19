@@ -3,12 +3,16 @@ per-call LLM cost log.
 
 See PROJECT.md §5.8 for the status lifecycle. Beyond that spec, this module
 also stores posting metadata (tech stack, salary breakdown, ATS vendor,
-etc.) and an applications/status-history schema purely for later analysis
-(`job stats`, `job export`) -- nothing here changes pipeline behavior.
+raw source payload, etc.), a scoring_runs history table (one row per
+scoring attempt, so `job analyze --rescore` can re-score with a newer
+model/prompt without losing older results), and an applications/
+status-history schema -- purely for later analysis (`job stats`,
+`job export`), nothing here changes pipeline behavior.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import sqlite3
 import statistics
@@ -48,6 +52,7 @@ CREATE TABLE IF NOT EXISTS postings (
     published_at TEXT,
     salary_raw TEXT,
     raw_tags TEXT,
+    raw_payload TEXT,
     ats_vendor TEXT,
     status TEXT NOT NULL DEFAULT 'new',
     filtered_reason TEXT,
@@ -70,6 +75,10 @@ CREATE TABLE IF NOT EXISTS postings (
     salary_max REAL,
     salary_currency TEXT,
     salary_period TEXT,
+    tech_tags TEXT,
+    portfolio_expected TEXT,
+    company_type TEXT,
+    seniority_label TEXT,
     score_failed_reason TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -91,6 +100,46 @@ CREATE TABLE IF NOT EXISTS llm_calls (
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_calls_posting_id ON llm_calls (posting_id);
+
+-- Full snapshot of every scoring attempt, including re-scores (job analyze
+-- --rescore). postings.* scoring columns above hold only the "primary"
+-- (first successful) result for backward-compat display purposes
+-- (Telegram cards, job stats); this table is the complete history.
+CREATE TABLE IF NOT EXISTS scoring_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    posting_id INTEGER NOT NULL REFERENCES postings (id),
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    fit_score INTEGER,
+    verdict TEXT,
+    matched_skills TEXT,
+    missing_skills TEXT,
+    seniority_match TEXT,
+    required_languages TEXT,
+    language_mismatch INTEGER,
+    relocation_offered TEXT,
+    recommended_cv_track TEXT,
+    rationale TEXT,
+    tech_stack TEXT,
+    required_years_experience REAL,
+    seniority_level TEXT,
+    work_format TEXT,
+    country TEXT,
+    salary_min REAL,
+    salary_max REAL,
+    salary_currency TEXT,
+    salary_period TEXT,
+    tech_tags TEXT,
+    portfolio_expected TEXT,
+    company_type TEXT,
+    seniority_label TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_usd REAL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_scoring_runs_posting_id ON scoring_runs (posting_id);
 
 CREATE TABLE IF NOT EXISTS applications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,6 +175,8 @@ YEARS_EXPERIENCE_BUCKETS: list[tuple[float, float | None, str]] = [
     (5, None, "5+"),
 ]
 
+PORTFOLIO_EXPECTATION_KEYS = ["github", "portfolio", "test_task", "none", "unstated"]
+
 
 def now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -150,9 +201,12 @@ class Posting:
     """A normalized posting. Sources produce these; dedup.py fills in
     canonical_url and dedup_hash before insert_posting() is called.
     ats_vendor is detected from the URL at collection time (see
-    ats_vendor.py) -- everything else metadata-related (tech_stack,
-    salary breakdown, etc.) is LLM-extracted during scoring and set via
-    update_posting_status() instead."""
+    ats_vendor.py). raw_payload is a JSON dump of every field the source
+    module had available for this item (not just what we normalize into
+    the columns below) -- kept so a posting can be re-analyzed later
+    without re-scraping; never discarded. Everything else metadata-related
+    (tech_stack, salary breakdown, etc.) is LLM-extracted during scoring
+    and set via update_posting_status() instead."""
 
     source: str
     url: str
@@ -164,6 +218,7 @@ class Posting:
     published_at: str | None = None
     salary_raw: str | None = None
     raw_tags: list[str] = field(default_factory=list)
+    raw_payload: str | None = None
     ats_vendor: str | None = None
     canonical_url: str | None = None
     dedup_hash: str | None = None
@@ -188,8 +243,8 @@ def insert_posting(
         INSERT INTO postings (
             source, url, canonical_url, dedup_hash, title, company, location,
             remote_type, description, published_at, salary_raw, raw_tags,
-            ats_vendor, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            raw_payload, ats_vendor, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             posting.source,
@@ -204,6 +259,7 @@ def insert_posting(
             posting.published_at,
             posting.salary_raw,
             json.dumps(posting.raw_tags),
+            posting.raw_payload,
             posting.ats_vendor,
             status,
             ts,
@@ -234,6 +290,16 @@ def get_postings_by_status(conn: sqlite3.Connection, status: PostingStatus) -> l
     return conn.execute(
         "SELECT * FROM postings WHERE status = ? ORDER BY created_at", (status,)
     ).fetchall()
+
+
+def get_all_postings(
+    conn: sqlite3.Connection, *, limit: int | None = None
+) -> list[sqlite3.Row]:
+    query = "SELECT * FROM postings ORDER BY id"
+    if limit is not None:
+        query += " LIMIT ?"
+        return conn.execute(query, (limit,)).fetchall()
+    return conn.execute(query).fetchall()
 
 
 def record_llm_call(
@@ -278,6 +344,49 @@ def status_counts(conn: sqlite3.Connection) -> dict[str, int]:
 def source_counts(conn: sqlite3.Connection) -> dict[str, int]:
     rows = conn.execute("SELECT source, COUNT(*) AS n FROM postings GROUP BY source").fetchall()
     return {row["source"]: row["n"] for row in rows}
+
+
+# --- Scoring runs ---------------------------------------------------------
+
+
+def insert_scoring_run(
+    conn: sqlite3.Connection,
+    *,
+    posting_id: int,
+    model: str,
+    prompt_version: str,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cost_usd: float | None = None,
+    **result_fields: Any,
+) -> int:
+    """`result_fields` are the same ScoringResult-derived kwargs passed to
+    update_posting_status() -- see scoring.py, which builds one dict and
+    passes it to both."""
+    columns = {
+        "posting_id": posting_id,
+        "model": model,
+        "prompt_version": prompt_version,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cost_usd": cost_usd,
+        "created_at": now_iso(),
+        **result_fields,
+    }
+    col_names = ", ".join(columns.keys())
+    placeholders = ", ".join("?" for _ in columns)
+    cur = conn.execute(
+        f"INSERT INTO scoring_runs ({col_names}) VALUES ({placeholders})",
+        tuple(columns.values()),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def get_scoring_runs_for_posting(conn: sqlite3.Connection, posting_id: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM scoring_runs WHERE posting_id = ? ORDER BY created_at", (posting_id,)
+    ).fetchall()
 
 
 # --- Applications ------------------------------------------------------
@@ -410,7 +519,7 @@ def reply_rate_by(
 
 
 def median_salary_by_tech_tag(conn: sqlite3.Connection) -> dict[str, tuple[float, int]]:
-    """Returns {tag: (median_salary, sample_count)}."""
+    """Returns {tag: (median_salary, sample_count)} from the flat tech_stack list."""
     rows = conn.execute(
         "SELECT tech_stack, salary_min, salary_max FROM postings "
         "WHERE tech_stack IS NOT NULL AND (salary_min IS NOT NULL OR salary_max IS NOT NULL)"
@@ -453,3 +562,108 @@ def median_days_to_first_reply(conn: sqlite3.Connection) -> tuple[float, int] | 
         replied = datetime.fromisoformat(row["first_reply_at"])
         deltas.append((replied - submitted).total_seconds() / 86400)
     return statistics.median(deltas), len(deltas)
+
+
+def _posting_tech_tags(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT tech_tags, salary_min, salary_max, required_years_experience, "
+        "published_at, created_at FROM postings WHERE tech_tags IS NOT NULL"
+    ).fetchall()
+
+
+def tech_tag_cooccurrence(
+    conn: sqlite3.Connection, *, top_n: int = 10
+) -> dict[str, list[tuple[tuple[str, ...], int]]]:
+    """Top co-occurring tech_tags pairs and triples within the same posting."""
+    pair_counter: Counter[tuple[str, ...]] = Counter()
+    triple_counter: Counter[tuple[str, ...]] = Counter()
+    for row in _posting_tech_tags(conn):
+        tags = sorted({entry["tag"] for entry in json.loads(row["tech_tags"] or "[]")})
+        pair_counter.update(itertools.combinations(tags, 2))
+        triple_counter.update(itertools.combinations(tags, 3))
+    return {
+        "pairs": pair_counter.most_common(top_n),
+        "triples": triple_counter.most_common(top_n),
+    }
+
+
+def tech_tag_stats(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Per tag: frequency, required-vs-nice_to_have share, median salary of
+    postings that mention it, and share of those postings asking for 0-1
+    years of experience -- each with its underlying sample count."""
+    accum: dict[str, dict[str, Any]] = {}
+    for row in _posting_tech_tags(conn):
+        if row["salary_min"] is not None and row["salary_max"] is not None:
+            salary = (row["salary_min"] + row["salary_max"]) / 2
+        else:
+            salary = row["salary_min"] if row["salary_min"] is not None else row["salary_max"]
+        years = row["required_years_experience"]
+
+        seen: set[str] = set()
+        for entry in json.loads(row["tech_tags"] or "[]"):
+            tag = entry["tag"]
+            if tag in seen:
+                continue
+            seen.add(tag)
+            stat = accum.setdefault(
+                tag,
+                {
+                    "frequency": 0,
+                    "required_count": 0,
+                    "salaries": [],
+                    "junior_count": 0,
+                    "years_count": 0,
+                },
+            )
+            stat["frequency"] += 1
+            if entry.get("priority") == "required":
+                stat["required_count"] += 1
+            if salary is not None:
+                stat["salaries"].append(salary)
+            if years is not None:
+                stat["years_count"] += 1
+                if years <= 1:
+                    stat["junior_count"] += 1
+
+    result: dict[str, dict[str, Any]] = {}
+    for tag, stat in accum.items():
+        frequency = stat["frequency"]
+        years_count = stat["years_count"]
+        result[tag] = {
+            "frequency": frequency,
+            "required_count": stat["required_count"],
+            "required_share": stat["required_count"] / frequency if frequency else 0.0,
+            "median_salary": statistics.median(stat["salaries"]) if stat["salaries"] else None,
+            "salary_count": len(stat["salaries"]),
+            "junior_count": stat["junior_count"],
+            "years_count": years_count,
+            "junior_share": stat["junior_count"] / years_count if years_count else 0.0,
+        }
+    return result
+
+
+def tech_tag_monthly_trend(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+    """{tag: {"YYYY-MM": count}}, keyed by published_at (falling back to
+    created_at when a source doesn't provide one)."""
+    trend: dict[str, dict[str, int]] = {}
+    for row in _posting_tech_tags(conn):
+        date_str = row["published_at"] or row["created_at"]
+        if not date_str:
+            continue
+        month = date_str[:7]
+        for entry in json.loads(row["tech_tags"] or "[]"):
+            tag = entry["tag"]
+            trend.setdefault(tag, {}).setdefault(month, 0)
+            trend[tag][month] += 1
+    return trend
+
+
+def portfolio_expectation_stats(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
+    """Returns {key: (count, total_scored)} for github/portfolio/test_task/
+    none/unstated, among scored postings."""
+    rows = conn.execute(
+        "SELECT portfolio_expected FROM postings WHERE status = 'scored'"
+    ).fetchall()
+    total = len(rows)
+    counter: Counter[str] = Counter(row["portfolio_expected"] or "unstated" for row in rows)
+    return {key: (counter.get(key, 0), total) for key in PORTFOLIO_EXPECTATION_KEYS}

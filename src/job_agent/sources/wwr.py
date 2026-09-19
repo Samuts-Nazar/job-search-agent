@@ -18,7 +18,7 @@ import httpx
 
 from job_agent.config import WwrSourceConfig
 from job_agent.db import Posting
-from job_agent.sources.base import entry_published_at, fetch_text, make_client
+from job_agent.sources.base import entry_published_at, entry_raw_payload, fetch_text, make_client
 
 FEED_URL_TEMPLATE = "https://weworkremotely.com/categories/{slug}.rss"
 
@@ -46,6 +46,7 @@ def parse_wwr_rss(raw_xml: str, category_slug: str) -> list[Posting]:
                 remote_type="remote",
                 published_at=entry_published_at(entry),
                 raw_tags=[entry.get("category") or category_slug],
+                raw_payload=entry_raw_payload(entry),
             )
         )
     return postings

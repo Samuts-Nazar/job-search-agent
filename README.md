@@ -61,23 +61,41 @@ uv run job stats        # print pipeline/spend stats + extended aggregates (skil
 uv run job check-data   # validate data/facts.yaml and data/answers.yaml (also run before every `job`)
 uv run job render-test  # render the CV template against data.example content, run ATS + OpenResume checks
 uv run job export       # dump postings/scores/applications to CSV in output/export/ for outside analysis
+uv run job analyze --rescore  # re-score every stored posting with the current model/prompt
+                               # as new scoring_runs rows, without touching the original result
 ```
 
 ## Data collected beyond the fit score
 
 Scoring also extracts posting metadata that doesn't affect pipeline
-behavior yet, purely so it's there for later analysis: tech stack,
+behavior yet, purely so it's there for later analysis: tech stack (flat
+list, and a richer `tech_tags` list tagged required/nice_to_have),
 required years of experience, stated seniority level, work format,
-country, and a salary breakdown (min/max/currency/period). Every one of
-these fields is optional -- the model never fails validation for not
-finding one. The apply/company URL is also checked against a small list of
-known ATS domains (Greenhouse, Lever, Workable, Teamtailor, ...; see
+country, salary breakdown (min/max/currency/period), portfolio/GitHub/
+test-task expectations, and company type. Every one of these fields is
+optional -- the model never fails validation for not finding one. The
+apply/company URL is also checked against a small list of known ATS
+domains (Greenhouse, Lever, Workable, Teamtailor, ...; see
 `ats_vendor.py`) with no network request.
 
 Postings dropped by the prefilter keep the reason (`filtered_reason`:
 `category_not_allowed` or `seniority_stopword:<word>` / `seniority_years:<n>`)
 instead of just a bare "filtered_out" status. Every scored posting's full
-result is stored regardless of whether it's above threshold.
+result is stored regardless of whether it's above threshold, and each
+posting's raw source payload (every field the source gave us, not just
+what we normalize) is kept in `raw_payload` so it can be re-analyzed later
+without re-scraping.
+
+Every scoring attempt (including `job analyze --rescore` re-scores) is
+recorded as its own row in `scoring_runs`, tagged with the exact model and
+prompt version used -- the `postings` table's own fit_score/verdict/etc.
+columns only ever reflect the first ("primary") successful score, which is
+what the Telegram digest and `job stats` show.
+
+`job stats` also reports tech-tag co-occurrence (top pairs/triples),
+per-tag frequency/required-share/median-salary/junior-share, a monthly
+posting trend per tag, and the share of postings expecting a GitHub
+profile / portfolio / take-home test.
 
 An `applications` table (plus a status-history table) exists for Phase
 3's form-fill/submission flow to write into later -- nothing in Phase 1/2

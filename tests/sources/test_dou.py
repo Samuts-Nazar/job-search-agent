@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from job_agent.sources.dou import _parse_title, parse_dou_rss
@@ -48,3 +49,6 @@ def test_parse_dou_rss_returns_normalized_postings():
     assert first.remote_type == "remote"
     assert first.raw_tags == ["QA"]
     assert first.description
+    assert first.raw_payload is not None
+    payload = json.loads(first.raw_payload)
+    assert payload["link"] == first.url

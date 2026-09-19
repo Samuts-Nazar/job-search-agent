@@ -282,3 +282,90 @@ def test_export_command_rejects_unsupported_format(tmp_path):
         cli.app, ["export", "--db", str(db_path), "--format", "json"]
     )
     assert result.exit_code == 1
+
+
+def test_posting_from_row_reconstructs_posting(tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    posting = make_posting(raw_payload='{"raw": true}', ats_vendor="greenhouse")
+    posting.canonical_url = posting.url
+    posting.dedup_hash = "hash1"
+    posting_id = db.insert_posting(conn, posting)
+    row = db.get_posting(conn, posting_id)
+    conn.close()
+
+    rebuilt = cli._posting_from_row(row)
+
+    assert rebuilt.source == "djinni"
+    assert rebuilt.url == posting.url
+    assert rebuilt.title == "QA Automation Engineer"
+    assert rebuilt.raw_tags == ["QA"]
+    assert rebuilt.raw_payload == '{"raw": true}'
+    assert rebuilt.ats_vendor == "greenhouse"
+    assert rebuilt.canonical_url == posting.url
+    assert rebuilt.dedup_hash == "hash1"
+
+
+def test_analyze_without_rescore_flag_errors(tmp_path):
+    result = runner.invoke(cli.app, ["analyze", "--db", str(tmp_path / "jobs.db")])
+    assert result.exit_code == 1
+    assert "--rescore" in result.output
+
+
+def test_analyze_rescore_calls_score_posting_for_every_stored_posting(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    posting1 = make_posting()
+    posting1.canonical_url = posting1.url
+    posting1.dedup_hash = "hash1"
+    db.insert_posting(conn, posting1)
+
+    posting2 = make_posting(url="https://a/2")
+    posting2.canonical_url = "https://a/2"
+    posting2.dedup_hash = "hash2"
+    posting2_id = db.insert_posting(conn, posting2)
+    db.update_posting_status(
+        conn, posting2_id, "filtered_out", filtered_reason="category_not_allowed"
+    )
+    conn.close()
+
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(cli, "make_client", lambda api_key: _NullContextClient())
+    monkeypatch.setattr(cli.facts, "load_facts", lambda path: {})
+    monkeypatch.setattr(cli.facts, "render_facts_summary", lambda data: "facts")
+
+    calls = []
+
+    def fake_score_posting(conn_, client, *, posting_id, posting, config, facts_summary, **kwargs):
+        calls.append((posting_id, kwargs.get("record_as_primary")))
+        return None
+
+    monkeypatch.setattr(cli.scoring, "score_posting", fake_score_posting)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "analyze",
+            "--rescore",
+            "--db",
+            str(db_path),
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--facts",
+            "data.example/facts.example.yaml",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2  # both postings rescored, including the filtered-out one
+    assert all(record_as_primary is False for _pid, record_as_primary in calls)

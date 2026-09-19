@@ -31,6 +31,7 @@ def test_format_extended_stats_on_empty_db(conn):
     assert "no submitted applications yet" in text
     assert "no salary data yet" in text
     assert "no replies recorded yet" in text
+    assert "no tech_tags data yet" in text
 
 
 def test_format_extended_stats_shows_counts_alongside_percentages(conn):
@@ -47,3 +48,40 @@ def test_format_extended_stats_shows_counts_alongside_percentages(conn):
     text = format_extended_stats(conn)
     assert "Docker: 1" in text
     assert "qa_automation: 100% (1/1)" in text
+
+
+def test_format_extended_stats_tech_tag_sections(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    db.update_posting_status(
+        conn,
+        id1,
+        "scored",
+        tech_tags=(
+            '[{"tag": "Python", "priority": "required"}, '
+            '{"tag": "AWS", "priority": "nice_to_have"}]'
+        ),
+        salary_min=2000.0,
+        salary_max=2000.0,
+        required_years_experience=0.5,
+        portfolio_expected="github",
+    )
+    db.update_posting_status(
+        conn,
+        id2,
+        "scored",
+        tech_tags='[{"tag": "Python", "priority": "required"}]',
+        salary_min=4000.0,
+        salary_max=4000.0,
+        required_years_experience=5,
+        portfolio_expected="none",
+    )
+
+    text = format_extended_stats(conn)
+    assert "AWS + Python" in text  # pairs are alphabetically sorted before joining
+    assert "Python: frequency=2" in text
+    assert "median_salary=3000" in text
+    assert "github: 50% (1/2)" in text
+    assert "none: 50% (1/2)" in text

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from job_agent.sources.djinni import parse_djinni_rss
@@ -25,3 +26,13 @@ def test_parse_djinni_rss_has_no_structured_company_or_location():
     for posting in postings:
         assert posting.company is None
         assert posting.location is None
+
+
+def test_parse_djinni_rss_captures_raw_payload():
+    raw = FIXTURE.read_text(encoding="utf-8")
+    postings = parse_djinni_rss(raw)
+    first = postings[0]
+    assert first.raw_payload is not None
+    payload = json.loads(first.raw_payload)
+    assert payload["title"] == first.title
+    assert payload["link"] == first.url

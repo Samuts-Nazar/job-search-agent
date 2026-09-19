@@ -20,7 +20,7 @@ import httpx
 
 from job_agent.config import DouSourceConfig
 from job_agent.db import Posting
-from job_agent.sources.base import fetch_text, make_client
+from job_agent.sources.base import entry_raw_payload, fetch_text, make_client
 
 FEED_URL = "https://jobs.dou.ua/vacancies/feeds/"
 
@@ -73,6 +73,7 @@ def parse_dou_rss(raw_xml: str, category: str) -> list[Posting]:
                 remote_type="remote" if is_remote else None,
                 salary_raw=salary,
                 raw_tags=[category],
+                raw_payload=entry_raw_payload(entry),
             )
         )
     return postings

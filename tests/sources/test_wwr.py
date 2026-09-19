@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from job_agent.sources.wwr import _split_title, parse_wwr_rss
@@ -28,3 +29,6 @@ def test_parse_wwr_rss_returns_normalized_postings():
     assert first.remote_type == "remote"
     assert first.raw_tags == ["DevOps and Sysadmin"]
     assert first.published_at is not None
+    assert first.raw_payload is not None
+    payload = json.loads(first.raw_payload)
+    assert payload["link"] == first.url

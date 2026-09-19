@@ -14,7 +14,7 @@ import httpx
 
 from job_agent.config import DjinniSourceConfig
 from job_agent.db import Posting
-from job_agent.sources.base import entry_published_at, fetch_text, make_client
+from job_agent.sources.base import entry_published_at, entry_raw_payload, fetch_text, make_client
 
 FEED_URL = "https://djinni.co/jobs/rss/"
 
@@ -32,6 +32,7 @@ def parse_djinni_rss(raw_xml: str) -> list[Posting]:
                 description=entry.get("summary", ""),
                 published_at=entry_published_at(entry),
                 raw_tags=tags,
+                raw_payload=entry_raw_payload(entry),
             )
         )
     return postings
