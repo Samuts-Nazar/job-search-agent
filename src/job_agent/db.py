@@ -166,6 +166,20 @@ CREATE TABLE IF NOT EXISTS application_status_history (
 
 CREATE INDEX IF NOT EXISTS idx_application_status_history_application_id
     ON application_status_history (application_id);
+
+-- One row per Telegram card message sent for a posting, so `job
+-- telegram-cleanup` can find and delete the bot's own low-score cards.
+-- deleted_at is set once cleanup successfully deletes the message, so a
+-- later cleanup run doesn't retry it.
+CREATE TABLE IF NOT EXISTS telegram_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    posting_id INTEGER NOT NULL REFERENCES postings (id),
+    message_id INTEGER NOT NULL,
+    sent_at TEXT NOT NULL,
+    deleted_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_telegram_messages_posting_id ON telegram_messages (posting_id);
 """
 
 YEARS_EXPERIENCE_BUCKETS: list[tuple[float, float | None, str]] = [
@@ -476,6 +490,42 @@ def get_application_status_history(
         "SELECT * FROM application_status_history WHERE application_id = ? ORDER BY changed_at",
         (application_id,),
     ).fetchall()
+
+
+# --- Telegram messages ---------------------------------------------------
+
+
+def insert_telegram_message(conn: sqlite3.Connection, *, posting_id: int, message_id: int) -> int:
+    cur = conn.execute(
+        "INSERT INTO telegram_messages (posting_id, message_id, sent_at) VALUES (?, ?, ?)",
+        (posting_id, message_id, now_iso()),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def get_deletable_telegram_messages(
+    conn: sqlite3.Connection, *, below_score: int
+) -> list[sqlite3.Row]:
+    """Not-yet-deleted card messages for postings scored under below_score."""
+    return conn.execute(
+        """
+        SELECT tm.id AS id, tm.posting_id AS posting_id, tm.message_id AS message_id
+        FROM telegram_messages tm
+        JOIN postings p ON p.id = tm.posting_id
+        WHERE tm.deleted_at IS NULL AND p.fit_score < ?
+        ORDER BY tm.id
+        """,
+        (below_score,),
+    ).fetchall()
+
+
+def mark_telegram_message_deleted(conn: sqlite3.Connection, telegram_message_id: int) -> None:
+    conn.execute(
+        "UPDATE telegram_messages SET deleted_at = ? WHERE id = ?",
+        (now_iso(), telegram_message_id),
+    )
+    conn.commit()
 
 
 # --- Aggregates for `job stats` -----------------------------------------

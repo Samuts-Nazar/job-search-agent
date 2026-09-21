@@ -56,6 +56,7 @@ and must be avoided or the setting must be re-checked.
 
 ```
 uv run job              # full pipeline run, then stays up for Telegram interaction (Ctrl+C to stop)
+uv run job --no-telegram      # same run, but sends and polls nothing (collect + score only)
 uv run job eval         # compare models in config.yaml -> models.eval_candidates
 uv run job stats        # print pipeline/spend stats + extended aggregates (skills, reply rate, salary, ...)
 uv run job check-data   # validate data/facts.yaml and data/answers.yaml (also run before every `job`)
@@ -63,7 +64,14 @@ uv run job render-test  # render the CV template against data.example content, r
 uv run job export       # dump postings/scores/applications to CSV in output/export/ for outside analysis
 uv run job analyze --rescore  # re-score every stored posting with the current model/prompt
                                # as new scoring_runs rows, without touching the original result
+uv run job telegram-cleanup --below 40  # delete the bot's own cards for postings scored under 40
+                                         # (Telegram only allows deleting messages <48h old)
 ```
+
+Which scored postings get a Telegram card is controlled by `telegram.min_score`
+in config.yaml -- independent of `thresholds.*.fit_score_min`/`maybe_score_min`,
+which only set the apply/maybe/skip bands shown on each card (see
+`job_agent/scoring.py:derive_verdict`).
 
 ## Data collected beyond the fit score
 

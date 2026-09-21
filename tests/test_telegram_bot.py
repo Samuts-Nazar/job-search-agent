@@ -1,6 +1,8 @@
 import json
+from dataclasses import dataclass, field
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 
 from job_agent import db, telegram_bot
 
@@ -14,15 +16,17 @@ def conn(tmp_path):
 
 
 def insert_scored_posting(conn, **overrides) -> int:
+    url = overrides.pop("url", "https://djinni.co/jobs/1/")
+    dedup_hash = overrides.pop("dedup_hash", "hash1")
     posting = db.Posting(
         source="djinni",
-        url="https://djinni.co/jobs/1/",
+        url=url,
         title="QA Automation Engineer",
         description="desc",
         company="Acme",
     )
     posting.canonical_url = posting.url
-    posting.dedup_hash = "hash1"
+    posting.dedup_hash = dedup_hash
     posting_id = db.insert_posting(conn, posting)
     fields = dict(
         fit_score=80,
@@ -46,11 +50,12 @@ def test_format_digest():
 
 
 def test_format_posting_card_shows_flags(conn):
-    insert_scored_posting(conn)
+    posting_id = insert_scored_posting(conn)
     row = db.get_postings_by_status(conn, "scored")[0]
     text, keyboard = telegram_bot.format_posting_card(row)
 
     assert "QA Automation Engineer" in text
+    assert f"ID: {posting_id}" in text
     assert "Acme" in text
     assert "Score: 80 (apply)" in text
     assert "Python" in text
@@ -122,3 +127,99 @@ def test_skip_posting_updates_status(conn):
     telegram_bot.skip_posting(conn, posting_id)
     row = db.get_posting(conn, posting_id)
     assert row["status"] == "skipped"
+
+
+@dataclass
+class _SentMessage:
+    message_id: int
+
+
+@dataclass
+class _FakeBot:
+    """Duck-types the subset of aiogram.Bot send_digest_and_cards/
+    cleanup_old_cards actually call, so tests don't need a real token or
+    network access."""
+
+    next_message_id: int = 100
+    undeletable_message_ids: set[int] = field(default_factory=set)
+    sent: list[tuple[str, str]] = field(default_factory=list)
+    deleted: list[int] = field(default_factory=list)
+
+    async def send_message(self, chat_id, text, reply_markup=None):
+        self.sent.append((chat_id, text))
+        message = _SentMessage(message_id=self.next_message_id)
+        self.next_message_id += 1
+        return message
+
+    async def delete_message(self, chat_id, message_id):
+        if message_id in self.undeletable_message_ids:
+            raise TelegramBadRequest(method=object(), message="message can't be deleted")
+        self.deleted.append(message_id)
+
+
+async def test_send_digest_and_cards_stores_message_id_and_filters_by_min_score(conn):
+    low_id = insert_scored_posting(conn, url="https://djinni.co/jobs/low/", fit_score=10)
+    high_id = insert_scored_posting(
+        conn, url="https://djinni.co/jobs/high/", fit_score=90, dedup_hash="hash2"
+    )
+    rows = [db.get_posting(conn, low_id), db.get_posting(conn, high_id)]
+    bot = _FakeBot()
+
+    await telegram_bot.send_digest_and_cards(
+        bot,
+        "chat-1",
+        conn,
+        source_counts={"djinni": 2},
+        scored_rows=rows,
+        fit_score_min=40,
+    )
+
+    # digest + only the high-score card
+    assert len(bot.sent) == 2
+    assert "QA Automation Engineer" in bot.sent[1][1]
+
+    stored = conn.execute("SELECT posting_id, message_id FROM telegram_messages").fetchall()
+    assert len(stored) == 1
+    assert stored[0]["posting_id"] == high_id
+
+
+async def test_cleanup_old_cards_deletes_below_threshold_and_reports_too_old(conn):
+    low_id = insert_scored_posting(conn, url="https://djinni.co/jobs/low/", fit_score=10)
+    older_low_id = insert_scored_posting(
+        conn, url="https://djinni.co/jobs/older-low/", fit_score=5, dedup_hash="hash2"
+    )
+    high_id = insert_scored_posting(
+        conn, url="https://djinni.co/jobs/high/", fit_score=90, dedup_hash="hash3"
+    )
+    db.insert_telegram_message(conn, posting_id=low_id, message_id=101)
+    db.insert_telegram_message(conn, posting_id=older_low_id, message_id=102)
+    db.insert_telegram_message(conn, posting_id=high_id, message_id=103)
+
+    bot = _FakeBot(undeletable_message_ids={102})
+
+    deleted, too_old = await telegram_bot.cleanup_old_cards(
+        bot, "chat-1", conn, below_score=40
+    )
+
+    assert deleted == 1
+    assert too_old == 1
+    assert bot.deleted == [101]
+
+    rows = conn.execute("SELECT posting_id, deleted_at FROM telegram_messages").fetchall()
+    by_posting = {row["posting_id"]: row["deleted_at"] for row in rows}
+    assert by_posting[low_id] is not None
+    assert by_posting[older_low_id] is None  # too old -- left for a future retry
+    assert by_posting[high_id] is None  # above threshold, never attempted
+
+
+async def test_cleanup_old_cards_does_not_retry_already_deleted(conn):
+    posting_id = insert_scored_posting(conn, fit_score=10)
+    db.insert_telegram_message(conn, posting_id=posting_id, message_id=101)
+    bot = _FakeBot()
+
+    await telegram_bot.cleanup_old_cards(bot, "chat-1", conn, below_score=40)
+    deleted, too_old = await telegram_bot.cleanup_old_cards(bot, "chat-1", conn, below_score=40)
+
+    assert deleted == 0
+    assert too_old == 0
+    assert bot.deleted == [101]

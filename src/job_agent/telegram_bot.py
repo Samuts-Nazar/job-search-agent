@@ -17,6 +17,7 @@ import sqlite3
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -55,6 +56,7 @@ def format_posting_card(row: sqlite3.Row) -> tuple[str, InlineKeyboardMarkup]:
 
     text = (
         f"<b>{row['title']}</b>\n"
+        f"ID: {row['id']}\n"
         f"{row['company'] or 'Unknown company'}\n"
         f"{row['url']}\n\n"
         f"Score: {row['fit_score']} ({row['verdict']})\n"
@@ -162,11 +164,16 @@ def build_router(conn: sqlite3.Connection) -> Router:
 async def send_digest_and_cards(
     bot: Bot,
     chat_id: str,
+    conn: sqlite3.Connection,
     *,
     source_counts: dict[str, int],
     scored_rows: list[sqlite3.Row],
     fit_score_min: int,
 ) -> None:
+    """fit_score_min here is config.telegram.min_score -- which cards get
+    sent -- decoupled from the apply/maybe/skip thresholds used to derive
+    verdict (see scoring.derive_verdict). Every sent card's message_id is
+    stored so `job telegram-cleanup` can find and delete it later."""
     verdict_counts: dict[str, int] = {}
     for row in scored_rows:
         verdict_counts[row["verdict"]] = verdict_counts.get(row["verdict"], 0) + 1
@@ -177,7 +184,28 @@ async def send_digest_and_cards(
         if row["fit_score"] is not None and row["fit_score"] < fit_score_min:
             continue
         text, keyboard = format_posting_card(row)
-        await bot.send_message(chat_id, text, reply_markup=keyboard)
+        sent = await bot.send_message(chat_id, text, reply_markup=keyboard)
+        db.insert_telegram_message(conn, posting_id=row["id"], message_id=sent.message_id)
+
+
+async def cleanup_old_cards(
+    bot: Bot, chat_id: str, conn: sqlite3.Connection, *, below_score: int
+) -> tuple[int, int]:
+    """Deletes the bot's own card messages for postings scored under
+    below_score. Telegram only allows deleting messages younger than 48
+    hours; anything older fails and is counted as too-old rather than
+    retried forever. Returns (deleted_count, too_old_count)."""
+    deleted = 0
+    too_old = 0
+    for row in db.get_deletable_telegram_messages(conn, below_score=below_score):
+        try:
+            await bot.delete_message(chat_id, row["message_id"])
+        except TelegramBadRequest:
+            too_old += 1
+            continue
+        db.mark_telegram_message_deleted(conn, row["id"])
+        deleted += 1
+    return deleted, too_old
 
 
 def build_bot(token: str) -> Bot:

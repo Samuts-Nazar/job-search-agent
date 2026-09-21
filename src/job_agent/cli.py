@@ -140,6 +140,7 @@ def run_pipeline(
 
 async def _send_digest(
     secrets: Secrets,
+    conn: sqlite3.Connection,
     source_counts: dict[str, int],
     scored_rows: list[sqlite3.Row],
     fit_score_min: int,
@@ -149,6 +150,7 @@ async def _send_digest(
         await telegram_bot.send_digest_and_cards(
             bot,
             secrets.telegram_chat_id,
+            conn,
             source_counts=source_counts,
             scored_rows=scored_rows,
             fit_score_min=fit_score_min,
@@ -166,6 +168,18 @@ async def _poll(conn: sqlite3.Connection, secrets: Secrets) -> None:
         await bot.session.close()
 
 
+async def _telegram_cleanup(
+    secrets: Secrets, conn: sqlite3.Connection, below_score: int
+) -> tuple[int, int]:
+    bot = telegram_bot.build_bot(secrets.telegram_bot_token)
+    try:
+        return await telegram_bot.cleanup_old_cards(
+            bot, secrets.telegram_chat_id, conn, below_score=below_score
+        )
+    finally:
+        await bot.session.close()
+
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
@@ -174,6 +188,9 @@ def main(
     env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
     facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
     answers_path: str = typer.Option(data_guard.ANSWERS_PATH, "--answers"),
+    no_telegram: bool = typer.Option(
+        False, "--no-telegram", help="Collect and score only -- send or poll nothing."
+    ),
 ) -> None:
     """Run the full pipeline once, then stay up for Telegram interaction (Ctrl+C to stop)."""
     if ctx.invoked_subcommand is not None:
@@ -202,14 +219,19 @@ def main(
         scored_rows, source_counts_this_run = run_pipeline(
             config, secrets, conn, facts_path=facts_path
         )
-        typer.echo("Sending Telegram digest...")
-        asyncio.run(
-            _send_digest(
-                secrets, source_counts_this_run, scored_rows, config.active_threshold.fit_score_min
+        if no_telegram:
+            typer.echo("--no-telegram set: pipeline run complete, nothing sent.")
+        else:
+            typer.echo("Sending Telegram digest...")
+            asyncio.run(
+                _send_digest(
+                    secrets, conn, source_counts_this_run, scored_rows, config.telegram.min_score
+                )
             )
-        )
-        typer.echo("Pipeline run complete. Listening for Telegram interaction (Ctrl+C to stop)...")
-        asyncio.run(_poll(conn, secrets))
+            typer.echo(
+                "Pipeline run complete. Listening for Telegram interaction (Ctrl+C to stop)..."
+            )
+            asyncio.run(_poll(conn, secrets))
     except KeyboardInterrupt:
         typer.echo("Shutting down.")
     except FileNotFoundError as exc:
@@ -395,6 +417,32 @@ def analyze(
         typer.echo(f"Re-scored {rescored}/{len(rows)} postings (new scoring_runs rows).")
     finally:
         conn.close()
+
+
+@app.command(name="telegram-cleanup")
+def telegram_cleanup(
+    below: int = typer.Option(..., "--below", help="Delete cards for postings scored under this."),
+    env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+) -> None:
+    """Delete the bot's own Telegram cards for postings scored under --below.
+
+    Telegram only allows deleting messages younger than 48 hours -- anything
+    older is reported separately rather than retried.
+    """
+    try:
+        secrets = load_secrets(env_path)
+    except ValidationError as exc:
+        typer.echo(f"Missing or invalid secrets in {env_path}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    try:
+        deleted, too_old = asyncio.run(_telegram_cleanup(secrets, conn, below))
+    finally:
+        conn.close()
+    typer.echo(f"Deleted {deleted} messages, {too_old} too old to delete (>48h).")
 
 
 if __name__ == "__main__":

@@ -368,3 +368,102 @@ def test_analyze_rescore_calls_score_posting_for_every_stored_posting(monkeypatc
     assert result.exit_code == 0, result.output
     assert len(calls) == 2  # both postings rescored, including the filtered-out one
     assert all(record_as_primary is False for _pid, record_as_primary in calls)
+
+
+def _prepare_main_invocation(monkeypatch, tmp_path):
+    """Common setup for `job` (main) CLI tests: real config, dummy secrets,
+    data_guard bypassed, and run_pipeline stubbed so no network is hit."""
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+    db_path = tmp_path / "jobs.db"
+
+    monkeypatch.setattr(cli.data_guard, "check_data_safety", lambda facts_path, answers_path: [])
+    monkeypatch.setattr(
+        cli, "run_pipeline", lambda config, secrets, conn, facts_path=None: ([], {"djinni": 0})
+    )
+    return config_path, env_path, db_path
+
+
+def test_main_no_telegram_skips_send_and_poll(monkeypatch, tmp_path):
+    config_path, env_path, db_path = _prepare_main_invocation(monkeypatch, tmp_path)
+
+    send_calls = []
+    poll_calls = []
+
+    async def fake_send_digest(*args, **kwargs):
+        send_calls.append(1)
+
+    async def fake_poll(*args, **kwargs):
+        poll_calls.append(1)
+
+    monkeypatch.setattr(cli, "_send_digest", fake_send_digest)
+    monkeypatch.setattr(cli, "_poll", fake_poll)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--db",
+            str(db_path),
+            "--no-telegram",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert send_calls == []
+    assert poll_calls == []
+    assert "nothing sent" in result.output
+
+
+def test_main_without_no_telegram_sends_and_polls(monkeypatch, tmp_path):
+    config_path, env_path, db_path = _prepare_main_invocation(monkeypatch, tmp_path)
+
+    send_calls = []
+    poll_calls = []
+
+    async def fake_send_digest(*args, **kwargs):
+        send_calls.append(1)
+
+    async def fake_poll(*args, **kwargs):
+        poll_calls.append(1)
+
+    monkeypatch.setattr(cli, "_send_digest", fake_send_digest)
+    monkeypatch.setattr(cli, "_poll", fake_poll)
+
+    result = runner.invoke(
+        cli.app,
+        ["--config", str(config_path), "--env", str(env_path), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert send_calls == [1]
+    assert poll_calls == [1]
+
+
+def test_telegram_cleanup_command_reports_counts(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs.db"
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    async def fake_cleanup(secrets, conn, below_score):
+        assert below_score == 40
+        return 3, 1
+
+    monkeypatch.setattr(cli, "_telegram_cleanup", fake_cleanup)
+
+    result = runner.invoke(
+        cli.app,
+        ["telegram-cleanup", "--below", "40", "--env", str(env_path), "--db", str(db_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Deleted 3 messages, 1 too old" in result.output
