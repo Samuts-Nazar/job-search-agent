@@ -14,6 +14,14 @@ from job_agent import db
 def format_extended_stats(conn: sqlite3.Connection) -> str:
     lines = ["", "Extended stats:", ""]
 
+    lines.append("Postings rejected by the category allowlist, per source:")
+    category_rejects = db.category_not_allowed_counts_by_source(conn)
+    if not category_rejects:
+        lines.append("  (none rejected on category yet)")
+    for source, count in sorted(category_rejects.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {source}: {count}")
+    lines.append("")
+
     lines.append("Recent pipeline runs (most recent first):")
     runs = db.get_recent_pipeline_runs(conn, limit=10)
     if not runs:

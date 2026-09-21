@@ -68,12 +68,26 @@ sources:
     # remoteok.com/api's `?tag=` query param does NOT filter server-side
     # (verified live 2026-09-16) -- these tags are matched client-side against
     # each posting's `tags` array in job_agent/sources/remoteok.py.
-    tags: ["qa", "support", "sysadmin", "machine-learning", "python"]
+    # IMPORTANT: match RemoteOK's own tag vocabulary exactly (verified live
+    # 2026-09-22 against every tag actually present in /api) -- the
+    # original list here ("qa", "support", "sysadmin", "machine-learning")
+    # matched NONE of RemoteOK's real tags, so those 4 categories were
+    # silently collecting zero RemoteOK postings the whole time. "python"
+    # was the only one that happened to match.
+    tags: ["quality assurance", "testing", "customer support", "sys admin", "ai", "data science", "python"]
   wwr:
     enabled: true
     # WWR only has category RSS feeds for 2 of our 6 targets (verified live
-    # 2026-09-16); QA, QA Automation, ML AI and Python have no WWR category.
+    # 2026-09-16); QA, QA Automation and ML AI have no WWR category, and no
+    # sound proxy category either -- left uncovered. Python has no direct
+    # category, but "back-end"/"full-stack programming" are a reasonable
+    # proxy: keyword_categories fetches those and keeps only items whose
+    # title matches (see job_agent/sources/wwr.py, verified live 2026-09-22
+    # that WWR's own ?term= search is NOT filtered server-side either).
     categories: ["remote-devops-sysadmin-jobs", "remote-customer-support-jobs"]
+    keyword_categories:
+      remote-back-end-programming-jobs: ["python"]
+      remote-full-stack-programming-jobs: ["python"]
   linkedin:
     enabled: true
     keywords: ["QA", "QA Automation", "Support", "Sysadmin", "Machine Learning", "Python"]

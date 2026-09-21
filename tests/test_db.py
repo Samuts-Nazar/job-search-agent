@@ -119,6 +119,25 @@ def test_status_counts_and_source_counts(conn):
     assert db.source_counts(conn) == {"djinni": 1, "dou": 1}
 
 
+def test_category_not_allowed_counts_by_source(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn,
+        make_posting(
+            canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2", source="djinni"
+        ),
+    )
+    id3 = db.insert_posting(
+        conn, make_posting(canonical_url="https://dou.ua/jobs/1/", dedup_hash="hash3", source="dou")
+    )
+    db.update_posting_status(conn, id1, "filtered_out", filtered_reason="category_not_allowed")
+    db.update_posting_status(conn, id2, "filtered_out", filtered_reason="seniority_stopword:lead")
+    db.update_posting_status(conn, id3, "filtered_out", filtered_reason="category_not_allowed")
+
+    counts = db.category_not_allowed_counts_by_source(conn)
+    assert counts == {"djinni": 1, "dou": 1}
+
+
 def test_insert_posting_stores_ats_vendor(conn):
     posting_id = db.insert_posting(conn, make_posting(ats_vendor="greenhouse"))
     row = db.get_posting(conn, posting_id)

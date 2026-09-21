@@ -81,6 +81,12 @@ class RemoteOkSourceConfig(BaseModel):
 class WwrSourceConfig(BaseModel):
     enabled: bool = True
     categories: list[str] = Field(default_factory=list)
+    # WWR has no QA/QA Automation/ML AI/Python category, and its ?term=
+    # search param isn't filtered server-side (verified live 2026-09-22) --
+    # this maps a WWR category slug to keywords matched client-side against
+    # each item's title, for categories where that's a sound proxy (see
+    # sources/wwr.py). {} by default: no source-of-truth match, no guess.
+    keyword_categories: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class LinkedinSourceConfig(BaseModel):
