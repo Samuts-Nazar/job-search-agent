@@ -168,15 +168,51 @@ Bot commands: `/pending`, `/stats`, `/mark <id> <status>` (for replies/rejection
 
 ## 8. CV template (Typst)
 
-Until the user provides the final design, build a minimal template that follows these rules:
 - A4, single column, no tables or multi-column layout, no icons, no photo, no date of birth, no street address.
-- Standard section headings: Summary, Technical Skills, Projects, Experience, Education, Languages.
+- Section order, every track: **header, headline line, technical skills, projects, experience, education.** No summary paragraph.
 - Contact line inside the body (not in header/footer): city, country, time zone, email, phone, LinkedIn, GitHub as text links.
 - Body text 10–11 pt, system/embedded fonts with full Unicode (Latin + Cyrillic).
 - Ligatures disabled.
-- Languages with CEFR levels.
 - Dates in one consistent format.
 - Content and layout are separate: the template reads a data file, so the design can later be replaced without touching the pipeline.
+
+### 8.1 Headline line
+
+Job title + three key tools + "English B2" (CEFR level comes from facts.yaml's `languages`, not hardcoded).
+
+- Title mirrors the posting's own title.
+- Never add "Junior" to the title unless the posting is an explicit trainee/academy program (e.g. EPAM Campus, SoftServe Academy) -- otherwise the title as mirrored from the posting stands on its own.
+
+### 8.2 Technical skills
+
+- 16–22 items, plain text, grouped into categories. No proficiency levels, no visual meters/bars.
+- Category order and item order within each category follow the posting's own requirements (most-emphasized-first), not a fixed personal ranking.
+- Every item must be a name that exists in facts.yaml's `skills` list -- see §8.4.
+
+### 8.3 Projects per track
+
+Fixed project selection and order per track (facts.yaml project `id`s):
+
+| Track | Projects (in order) |
+|---|---|
+| `manual_qa` | `rbp`, `job_agent`. Add `web_qa` as one line only when the posting mentions automation or growth into automation. |
+| `qa_automation` | `web_qa`, `rbp`, `job_agent` |
+| `ai_automation` | `job_agent`, `nefk`, `rbp` |
+| `ml_ai` | `witcher_lm`, `nefk`, `job_agent`. No QA projects on this track. |
+
+### 8.4 What varies per posting vs. what's fixed
+
+**Variable per posting:** headline title, skill category order, project selection within the track rules above (the `manual_qa` conditional `web_qa` line), which bullets from facts.yaml are used.
+
+**Fixed, never rewritten:** contact details, employers, titles (for experience entries), dates, education.
+
+### 8.5 Content validation (enforced in code after generation, not only in the prompt)
+
+A generated CV must be rejected and regenerated if any of these fail:
+- Every number, tool, title, employer, and date in the rendered CV exists in data/facts.yaml -- nothing invented.
+- Job titles on experience entries come only from facts.yaml; a role is never renamed.
+- Every listed skill is a member of facts.yaml's `skills` list (§8.2's ordering is free; the item set is not).
+- Education is rendered exactly as stored in facts.yaml (institution, degree, dates verbatim).
 
 ## 9. Stack (defaults, may change with justification)
 

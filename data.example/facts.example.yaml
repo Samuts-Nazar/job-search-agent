@@ -20,32 +20,36 @@ candidate:
     linkedin: "https://linkedin.com/in/jane-example"
     github: "https://github.com/jane-example"
 
+# Track taxonomy fixed 2026-09-22 (PROJECT.md §8.3): manual_qa, qa_automation,
+# ai_automation, ml_ai. Each track has a fixed project selection/order -- see
+# PROJECT.md §8.3 -- not encoded here since that's Phase 2 rendering logic,
+# not registry data.
 cv_tracks:
   - id: qa_automation
     title: "QA Automation Engineer"
   - id: manual_qa
     title: "Manual QA Engineer"
+  - id: ai_automation
+    title: "AI Automation Engineer"
   - id: ml_ai
     title: "ML/AI Engineer"
-  - id: general
-    title: "Software Engineer"
 
 skills:
   - name: "Python"
-    tracks: [qa_automation, ml_ai, general]
+    tracks: [qa_automation, ai_automation, ml_ai]
   - name: "Playwright"
     tracks: [qa_automation]
   - name: "pytest"
-    tracks: [qa_automation, general]
+    tracks: [qa_automation, ai_automation]
   - name: "Manual testing"
     tracks: [manual_qa]
   - name: "SQL"
-    tracks: [qa_automation, manual_qa, ml_ai, general]
+    tracks: [qa_automation, manual_qa, ai_automation, ml_ai]
 
 projects:
   - id: example_project_1
     name: "Example Test Automation Framework"
-    tracks: [qa_automation]
+    tracks: [qa_automation, manual_qa]
     summary: "Built a Playwright + pytest framework for an e-commerce checkout flow."
     metrics:
       - "Reduced regression run time from 4h to 40m"
@@ -56,7 +60,7 @@ experience:
   - id: example_job_1
     employer: "Example Corp"
     title: "QA Automation Engineer"
-    tracks: [qa_automation, general]
+    tracks: [qa_automation, ai_automation]
     dates: "2023-02 to present"
     bullets:
       - "Automated end-to-end tests for the checkout flow, cutting regression time from 4h to 40m."
