@@ -12,6 +12,15 @@ just "Data Scientist", no company suffix), but each posting's own live page
 has it in <meta property="og:title" content="<title> в <company> ">, the
 same "в" (Ukrainian "at/in") construction DOU's RSS titles use elsewhere.
 Recovering it means one extra HTTP GET per posting -- see backfill_company().
+
+Djinni's RSS feed always returns its current listing in full (there's no
+"since" param), so most items on any given run are postings already seen
+on a prior run. collect_djinni takes an optional `conn` specifically so it
+can skip the company fetch for postings already stored by canonical URL --
+without it, every run would re-fetch every posting's page again, including
+ones already collected and already carrying a company from before. Same
+per-request politeness delay as every other source's per-item fetch loop
+(e.g. linkedin.py's per-keyword delay).
 """
 
 from __future__ import annotations
@@ -19,13 +28,15 @@ from __future__ import annotations
 import html
 import random
 import re
+import sqlite3
 import time
 
 import feedparser
 import httpx
 
 from job_agent.config import DjinniSourceConfig
-from job_agent.db import Posting
+from job_agent.db import Posting, canonical_url_exists
+from job_agent.dedup import canonicalize_url
 from job_agent.sources.base import (
     entry_published_at,
     entry_raw_payload,
@@ -95,7 +106,11 @@ def backfill_company(client: httpx.Client, posting: Posting) -> None:
     posting.company = parse_djinni_company(page)
 
 
-def collect_djinni(config: DjinniSourceConfig, client: httpx.Client | None = None) -> list[Posting]:
+def collect_djinni(
+    config: DjinniSourceConfig,
+    client: httpx.Client | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> list[Posting]:
     if not config.enabled or not config.categories:
         return []
     owns_client = client is None
@@ -103,9 +118,16 @@ def collect_djinni(config: DjinniSourceConfig, client: httpx.Client | None = Non
     try:
         raw = fetch_djinni(client, config.categories)
         postings = parse_djinni_rss(raw)
-        for i, posting in enumerate(postings):
+
+        to_backfill = postings
+        if conn is not None:
+            to_backfill = [
+                p for p in postings if not canonical_url_exists(conn, canonicalize_url(p.url))
+            ]
+
+        for i, posting in enumerate(to_backfill):
             backfill_company(client, posting)
-            if i < len(postings) - 1:
+            if i < len(to_backfill) - 1:
                 time.sleep(random.uniform(*_FETCH_DELAY_RANGE))
         return postings
     finally:

@@ -38,9 +38,9 @@ DEFAULT_DB_PATH = "data/jobs.db"
 DEFAULT_ENV_PATH = ".env"
 
 
-def collect_all(config: Config) -> list[Posting]:
+def collect_all(config: Config, conn: sqlite3.Connection | None = None) -> list[Posting]:
     postings: list[Posting] = []
-    postings.extend(collect_djinni(config.sources.djinni))
+    postings.extend(collect_djinni(config.sources.djinni, conn=conn))
     postings.extend(collect_dou(config.sources.dou))
     postings.extend(collect_remoteok(config.sources.remoteok))
     postings.extend(collect_wwr(config.sources.wwr))
@@ -86,7 +86,7 @@ def run_pipeline(
 ) -> tuple[list[sqlite3.Row], dict[str, int]]:
     started_at = db.now_iso()
     typer.echo("Collecting postings...")
-    raw_postings = collect_all(config)
+    raw_postings = collect_all(config, conn)
     source_counts_this_run = _count_by_source(raw_postings)
     typer.echo(f"Collected {len(raw_postings)} postings: {source_counts_this_run}")
 

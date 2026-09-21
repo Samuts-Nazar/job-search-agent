@@ -302,6 +302,17 @@ def posting_exists(conn: sqlite3.Connection, *, canonical_url: str, dedup_hash: 
     return row is not None
 
 
+def canonical_url_exists(conn: sqlite3.Connection, canonical_url: str) -> bool:
+    """Cheap "have we seen this URL before" check, used to skip per-posting
+    work (e.g. Djinni's company page fetch) for postings that will be
+    dropped as duplicates anyway -- without needing the full dedup_hash
+    that dedup.dedup_new_postings computes."""
+    row = conn.execute(
+        "SELECT 1 FROM postings WHERE canonical_url = ? LIMIT 1", (canonical_url,)
+    ).fetchone()
+    return row is not None
+
+
 def insert_posting(
     conn: sqlite3.Connection, posting: Posting, status: PostingStatus = "new"
 ) -> int:

@@ -58,7 +58,9 @@ def conn(tmp_path):
 
 
 def test_collect_all_combines_sources(monkeypatch, config):
-    monkeypatch.setattr(cli, "collect_djinni", lambda c: [make_posting(url="https://a/1")])
+    monkeypatch.setattr(
+        cli, "collect_djinni", lambda c, conn=None: [make_posting(url="https://a/1")]
+    )
     monkeypatch.setattr(cli, "collect_dou", lambda c: [make_posting(url="https://a/2")])
     monkeypatch.setattr(cli, "collect_remoteok", lambda c: [])
     monkeypatch.setattr(cli, "collect_wwr", lambda c: [])
@@ -74,7 +76,7 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
         url="https://a/2", title="Senior QA Architect", raw_tags=["QA"]
     )
 
-    monkeypatch.setattr(cli, "collect_all", lambda c: [kept_posting, filtered_posting])
+    monkeypatch.setattr(cli, "collect_all", lambda c, conn=None: [kept_posting, filtered_posting])
     monkeypatch.setattr(cli.facts, "load_facts", lambda path: {})
     monkeypatch.setattr(cli.facts, "render_facts_summary", lambda data: "facts")
     monkeypatch.setattr(cli, "make_client", lambda api_key: _NullContextClient())

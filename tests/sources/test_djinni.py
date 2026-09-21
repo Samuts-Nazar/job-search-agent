@@ -3,7 +3,10 @@ from pathlib import Path
 
 import httpx
 
+from job_agent import db
 from job_agent.db import Posting
+from job_agent.dedup import canonicalize_url
+from job_agent.sources import djinni
 from job_agent.sources.djinni import backfill_company, parse_djinni_company, parse_djinni_rss
 
 FIXTURE = Path(__file__).parent / "fixtures" / "djinni_rss_qa_automation.xml"
@@ -103,3 +106,46 @@ def test_backfill_company_leaves_none_on_http_error(monkeypatch):
     backfill_company(object(), posting)
 
     assert posting.company is None
+
+
+def test_collect_djinni_skips_backfill_for_already_stored_urls(monkeypatch, tmp_path):
+    """The RSS feed always returns its full current listing (no "since"
+    param), so most postings on any given run were already collected on a
+    prior run -- collect_djinni must not re-fetch their page just because
+    they showed up in the feed again."""
+    raw = FIXTURE.read_text(encoding="utf-8")
+    already_known_url = "https://djinni.co/jobs/508398-bdd-quality-lead-quality-architecture-lead/"
+
+    conn = db.connect(tmp_path / "jobs.db")
+    db.init_db(conn)
+    known = Posting(
+        source="djinni",
+        url=already_known_url,
+        title="BDD Quality Lead",
+        description="desc",
+        canonical_url=canonicalize_url(already_known_url),
+        dedup_hash="already-known-hash",
+    )
+    db.insert_posting(conn, known)
+
+    fetched_pages: list[str] = []
+
+    def fake_fetch_djinni(client, categories):
+        return raw
+
+    def fake_fetch_page(client, url):
+        fetched_pages.append(url)
+        return OG_TITLE_HTML
+
+    monkeypatch.setattr(djinni, "fetch_djinni", fake_fetch_djinni)
+    monkeypatch.setattr(djinni, "fetch_djinni_posting_page", fake_fetch_page)
+    monkeypatch.setattr(djinni.time, "sleep", lambda _seconds: None)
+
+    from job_agent.config import DjinniSourceConfig
+
+    config = DjinniSourceConfig(enabled=True, categories=["QA Automation"])
+    postings = djinni.collect_djinni(config, client=object(), conn=conn)
+
+    assert len(postings) == 5  # every RSS item is still returned
+    assert already_known_url not in fetched_pages  # but its page wasn't re-fetched
+    assert len(fetched_pages) == 4  # the 4 genuinely-new postings were
