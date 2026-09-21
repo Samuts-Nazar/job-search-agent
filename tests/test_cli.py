@@ -381,6 +381,85 @@ def test_analyze_rescore_calls_score_posting_for_every_stored_posting(monkeypatc
     assert all(record_as_primary is False for _pid, record_as_primary in calls)
 
 
+def test_analyze_readmit_scores_newly_passing_and_leaves_the_rest_filtered(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = db.connect(db_path)
+    db.init_db(conn)
+
+    # simulates a posting the OLD substring-matching seniority filter wrongly
+    # rejected ("architect" inside "Architecture") -- the current whole-word
+    # filter (item 1 fix) no longer flags it.
+    newly_passing = make_posting(
+        url="https://a/1", title="QA Architecture Engineer", raw_tags=["QA"]
+    )
+    newly_passing.canonical_url = newly_passing.url
+    newly_passing.dedup_hash = "hash1"
+    newly_passing_id = db.insert_posting(conn, newly_passing)
+    db.update_posting_status(
+        conn, newly_passing_id, "filtered_out", filtered_reason="seniority_stopword:architect"
+    )
+
+    # config.example.yaml's wide mode uses the relaxed stopword list, which
+    # keeps "principal" -- unlike "senior", this one still rejects.
+    still_filtered = make_posting(
+        url="https://a/2", title="Principal QA Engineer", raw_tags=["QA"]
+    )
+    still_filtered.canonical_url = still_filtered.url
+    still_filtered.dedup_hash = "hash2"
+    still_filtered_id = db.insert_posting(conn, still_filtered)
+    db.update_posting_status(
+        conn, still_filtered_id, "filtered_out", filtered_reason="seniority_stopword:principal"
+    )
+    conn.close()
+
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(cli, "make_client", lambda api_key: _NullContextClient())
+    monkeypatch.setattr(cli.facts, "load_facts", lambda path: {})
+    monkeypatch.setattr(cli.facts, "render_facts_summary", lambda data: "facts")
+
+    scored_ids = []
+
+    def fake_score_posting(conn_, client, *, posting_id, posting, config, facts_summary, **kwargs):
+        scored_ids.append(posting_id)
+        db.update_posting_status(conn_, posting_id, "scored", fit_score=80, verdict="apply")
+        return object()
+
+    monkeypatch.setattr(cli.scoring, "score_posting", fake_score_posting)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "analyze",
+            "--readmit",
+            "--db",
+            str(db_path),
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert scored_ids == [newly_passing_id]
+
+    conn = db.connect(db_path)
+    admitted_row = db.get_posting(conn, newly_passing_id)
+    assert admitted_row["status"] == "scored"
+    assert admitted_row["filtered_reason"] is None
+
+    still_filtered_row = db.get_posting(conn, still_filtered_id)
+    assert still_filtered_row["status"] == "filtered_out"
+    assert still_filtered_row["filtered_reason"] == "seniority_stopword:principal"
+    conn.close()
+
+
 def _prepare_main_invocation(monkeypatch, tmp_path):
     """Common setup for `job` (main) CLI tests: real config, dummy secrets,
     data_guard bypassed, and run_pipeline stubbed so no network is hit."""

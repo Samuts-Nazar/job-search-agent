@@ -417,14 +417,16 @@ def source_counts(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def category_not_allowed_counts_by_source(conn: sqlite3.Connection) -> dict[str, int]:
-    """How many postings per source were rejected by the category allowlist
-    specifically (prefilter.passes_category_allowlist), as opposed to the
-    seniority filter -- lets a thin source config (e.g. a source missing a
-    category/tag/keyword mapping for one of the target categories) show up
-    as a number instead of silently under-collecting."""
+    """How many postings per source are currently rejected by the category
+    allowlist specifically (prefilter.passes_category_allowlist), as
+    opposed to the seniority filter -- lets a thin source config (e.g. a
+    source missing a category/tag/keyword mapping for one of the target
+    categories) show up as a number instead of silently under-collecting.
+    status = 'filtered_out' so a posting `job analyze --readmit` later
+    promotes to scored (which also clears its filtered_reason) drops out."""
     rows = conn.execute(
         "SELECT source, COUNT(*) AS n FROM postings "
-        "WHERE filtered_reason = 'category_not_allowed' GROUP BY source"
+        "WHERE status = 'filtered_out' AND filtered_reason = 'category_not_allowed' GROUP BY source"
     ).fetchall()
     return {row["source"]: row["n"] for row in rows}
 

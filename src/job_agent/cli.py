@@ -6,6 +6,7 @@ import asyncio
 import json
 import sqlite3
 
+import httpx
 import typer
 from pydantic import ValidationError
 
@@ -373,24 +374,77 @@ def eval_command(
     typer.echo(format_eval_report(reports))
 
 
+def _readmit_newly_passing(
+    conn: sqlite3.Connection,
+    client: httpx.Client,
+    config: Config,
+    facts_summary: str,
+    reasoning_overrides: dict[str, str | None],
+) -> tuple[int, int, int]:
+    """Re-checks every filtered_out posting against the current prefilter
+    (e.g. after a prefilter bug fix) and scores any that now pass, as a
+    primary result -- unlike --rescore, this promotes the posting's actual
+    status instead of only appending scoring_runs history.
+
+    Returns (examined_count, admitted_count, scored_count)."""
+    filtered_rows = db.get_postings_by_status(conn, "filtered_out")
+    postings = [_posting_from_row(row) for row in filtered_rows]
+    kept, _ = prefilter.prefilter_postings(
+        postings,
+        categories=config.categories,
+        seniority_strict=config.active_threshold.seniority_strict,
+    )
+    kept_urls = {posting.canonical_url for posting in kept}
+    admitted_rows = [row for row in filtered_rows if row["canonical_url"] in kept_urls]
+
+    scored = 0
+    for row in admitted_rows:
+        posting = _posting_from_row(row)
+        result = scoring.score_posting(
+            conn,
+            client,
+            posting_id=row["id"],
+            posting=posting,
+            config=config,
+            facts_summary=facts_summary,
+            reasoning_overrides=reasoning_overrides,
+            record_as_primary=True,
+        )
+        # score_posting already set status to scored/score_failed; this
+        # just clears the now-stale filtered_reason left over from before.
+        status = "scored" if result is not None else "score_failed"
+        db.update_posting_status(conn, row["id"], status, filtered_reason=None)
+        if result is not None:
+            scored += 1
+    return len(filtered_rows), len(admitted_rows), scored
+
+
 @app.command()
 def analyze(
     rescore: bool = typer.Option(False, "--rescore"),
+    readmit: bool = typer.Option(
+        False,
+        "--readmit",
+        help="Re-check filtered-out postings against the current prefilter and "
+        "score any that now pass, as primary results (e.g. after a prefilter fix).",
+    ),
     config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
     db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
     facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
     limit: int | None = typer.Option(None, "--limit"),
 ) -> None:
-    """Re-run scoring over every stored posting (including previously
-    filtered-out ones) with the current model and prompt version.
+    """--rescore: re-run scoring over every stored posting (including
+    previously filtered-out ones) with the current model and prompt
+    version, appending a new scoring_runs row per posting without touching
+    the posting's own primary result -- safe to run repeatedly.
 
-    Writes a new scoring_runs row per posting -- the posting's original
-    primary result (status, fit_score, etc.) is left untouched, so this is
-    safe to run repeatedly as models/prompts change without losing history.
+    --readmit: re-check filtered-out postings against the current
+    prefilter and score any that now pass, as primary results. The two can
+    be combined; --readmit runs first.
     """
-    if not rescore:
-        typer.echo("Nothing to do -- pass --rescore.", err=True)
+    if not rescore and not readmit:
+        typer.echo("Nothing to do -- pass --rescore or --readmit.", err=True)
         raise typer.Exit(code=1)
 
     try:
@@ -406,30 +460,41 @@ def analyze(
     conn = db.connect(db_path)
     db.init_db(conn)
     try:
-        rows = db.get_all_postings(conn, limit=limit)
-        typer.echo(f"Re-scoring {len(rows)} stored postings...")
-
         facts_data = facts.load_facts(facts_path)
         facts_summary = facts.render_facts_summary(facts_data)
-
-        rescored = 0
         reasoning_overrides: dict[str, str | None] = {}
-        with make_client(secrets.openrouter_api_key) as client:
-            for row in rows:
-                posting = _posting_from_row(row)
-                result = scoring.score_posting(
-                    conn,
-                    client,
-                    posting_id=row["id"],
-                    posting=posting,
-                    config=config,
-                    facts_summary=facts_summary,
-                    reasoning_overrides=reasoning_overrides,
-                    record_as_primary=False,
+
+        if readmit:
+            with make_client(secrets.openrouter_api_key) as client:
+                examined, admitted, scored = _readmit_newly_passing(
+                    conn, client, config, facts_summary, reasoning_overrides
                 )
-                if result is not None:
-                    rescored += 1
-        typer.echo(f"Re-scored {rescored}/{len(rows)} postings (new scoring_runs rows).")
+            typer.echo(
+                f"{admitted}/{examined} filtered-out postings now pass the prefilter; "
+                f"scored {scored}/{admitted} of them."
+            )
+
+        if rescore:
+            rows = db.get_all_postings(conn, limit=limit)
+            typer.echo(f"Re-scoring {len(rows)} stored postings...")
+
+            rescored = 0
+            with make_client(secrets.openrouter_api_key) as client:
+                for row in rows:
+                    posting = _posting_from_row(row)
+                    result = scoring.score_posting(
+                        conn,
+                        client,
+                        posting_id=row["id"],
+                        posting=posting,
+                        config=config,
+                        facts_summary=facts_summary,
+                        reasoning_overrides=reasoning_overrides,
+                        record_as_primary=False,
+                    )
+                    if result is not None:
+                        rescored += 1
+            typer.echo(f"Re-scored {rescored}/{len(rows)} postings (new scoring_runs rows).")
     finally:
         conn.close()
 

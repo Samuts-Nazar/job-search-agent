@@ -64,6 +64,8 @@ uv run job render-test  # render the CV template against data.example content, r
 uv run job export       # dump postings/scores/applications to CSV in output/export/ for outside analysis
 uv run job analyze --rescore  # re-score every stored posting with the current model/prompt
                                # as new scoring_runs rows, without touching the original result
+uv run job analyze --readmit  # re-check filtered-out postings against the current prefilter
+                               # (e.g. after a prefilter fix) and score any that now pass
 uv run job telegram-cleanup --below 40  # delete the bot's own cards for postings scored under 40
                                          # (Telegram only allows deleting messages <48h old)
 ```
