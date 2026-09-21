@@ -14,6 +14,19 @@ from job_agent import db
 def format_extended_stats(conn: sqlite3.Connection) -> str:
     lines = ["", "Extended stats:", ""]
 
+    lines.append("Recent pipeline runs (most recent first):")
+    runs = db.get_recent_pipeline_runs(conn, limit=10)
+    if not runs:
+        lines.append("  (no runs recorded yet)")
+    for run in runs:
+        lines.append(
+            f"  [{run['id']}] {run['kind']} {run['started_at']} -> {run['finished_at']}: "
+            f"collected={run['collected_count']}, new={run['new_count']}, "
+            f"filtered_out={run['filtered_out_count']}, scored={run['scored_count']}, "
+            f"score_failed={run['score_failed_count']}, cost=${run['cost_usd']:.4f}"
+        )
+    lines.append("")
+
     lines.append("Most frequent missing skills (top 20):")
     skill_counts = db.missing_skills_frequency(conn, limit=20)
     if not skill_counts:
@@ -32,12 +45,35 @@ def format_extended_stats(conn: sqlite3.Connection) -> str:
             lines.append(f"  {group}: {pct} ({replied}/{total})")
         lines.append("")
 
-    lines.append("Median salary by tech tag:")
+    lines.append("Median monthly-equivalent salary by currency (not converted across currencies):")
+    salary_by_currency = db.salary_stats_by_currency(conn)
+    if not salary_by_currency:
+        lines.append("  (no salary data with a known currency+period yet)")
+    for currency, stat in sorted(salary_by_currency.items()):
+        lines.append(f"  {currency}: {stat['median_monthly']:.0f}/month (n={stat['count']})")
+    lines.append("")
+
+    lines.append("Median monthly-equivalent salary by tech tag, per currency:")
     salary_by_tag = db.median_salary_by_tech_tag(conn)
     if not salary_by_tag:
-        lines.append("  (no salary data yet)")
-    for tag, (median, count) in sorted(salary_by_tag.items(), key=lambda kv: -kv[1][1]):
-        lines.append(f"  {tag}: {median:.0f} (n={count})")
+        lines.append("  (no salary data with a known currency+period yet)")
+    tag_totals = {
+        tag: sum(n for _, n in by_currency.values()) for tag, by_currency in salary_by_tag.items()
+    }
+    for tag in sorted(salary_by_tag, key=lambda t: -tag_totals[t]):
+        parts = ", ".join(
+            f"{currency}={median:.0f}/mo (n={count})"
+            for currency, (median, count) in sorted(salary_by_tag[tag].items())
+        )
+        lines.append(f"  {tag}: {parts}")
+    lines.append("")
+
+    lines.append("Per CV track (scored postings): count, avg fit_score:")
+    track_stats = db.stats_by_cv_track(conn)
+    if not track_stats:
+        lines.append("  (no scored postings yet)")
+    for track, stat in sorted(track_stats.items(), key=lambda kv: -kv[1]["count"]):
+        lines.append(f"  {track}: n={stat['count']}, avg_fit_score={stat['avg_fit_score']:.1f}")
     lines.append("")
 
     lines.append("Required years of experience distribution:")

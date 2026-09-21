@@ -27,9 +27,10 @@ def make_posting(**overrides) -> db.Posting:
 
 def test_format_extended_stats_on_empty_db(conn):
     text = format_extended_stats(conn)
+    assert "no runs recorded yet" in text
     assert "no scored postings yet" in text
     assert "no submitted applications yet" in text
-    assert "no salary data yet" in text
+    assert "no salary data with a known currency+period yet" in text
     assert "no replies recorded yet" in text
     assert "no tech_tags data yet" in text
 

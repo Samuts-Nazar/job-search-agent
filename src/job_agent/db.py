@@ -180,6 +180,23 @@ CREATE TABLE IF NOT EXISTS telegram_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_telegram_messages_posting_id ON telegram_messages (posting_id);
+
+-- One row per `job` pipeline execution (run_pipeline / job analyze
+-- --readmit), so run-over-run volume/cost/funnel numbers don't have to be
+-- reconstructed from postings.created_at ranges.
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT NOT NULL,
+    collected_count INTEGER NOT NULL,
+    new_count INTEGER NOT NULL,
+    filtered_out_count INTEGER NOT NULL,
+    scored_count INTEGER NOT NULL,
+    score_failed_count INTEGER NOT NULL,
+    source_counts TEXT NOT NULL,
+    cost_usd REAL NOT NULL
+);
 """
 
 YEARS_EXPERIENCE_BUCKETS: list[tuple[float, float | None, str]] = [
@@ -190,6 +207,45 @@ YEARS_EXPERIENCE_BUCKETS: list[tuple[float, float | None, str]] = [
 ]
 
 PORTFOLIO_EXPECTATION_KEYS = ["github", "portfolio", "test_task", "none", "unstated"]
+
+# Salary normalization: postings state salary as hour/day/month/year, and
+# the LLM extracts the currency as-written (symbol or code). Averaging
+# these directly mixes incomparable numbers (an hourly $50 and a monthly
+# $5000 aren't on the same scale, and neither are USD and UAH) -- every
+# salary aggregate below normalizes period to a monthly-equivalent and
+# currency to a canonical code first, and drops rows where either is
+# unknown rather than guessing. Hours/days-per-month use a standard
+# 40h/week, 5-day/week convention (52 weeks/year / 12 months); this is an
+# approximation, not a payroll-accurate conversion. Cross-currency
+# conversion (e.g. EUR -> USD) is deliberately NOT applied: that needs a
+# live, dated FX rate, so figures are reported per currency instead of
+# being combined into one number.
+_HOURS_PER_MONTH = 40 * 52 / 12  # ~173.3
+_DAYS_PER_MONTH = 5 * 52 / 12  # ~21.7
+_CURRENCY_ALIASES = {"$": "USD", "US$": "USD", "USD": "USD"}
+
+
+def normalize_salary_currency(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    cleaned = raw.strip().upper()
+    if not cleaned:
+        return None
+    return _CURRENCY_ALIASES.get(cleaned, cleaned)
+
+
+def normalize_salary_to_monthly(value: float, period: str | None) -> float | None:
+    """None if period is missing/unrecognized -- excluded rather than
+    guessed by callers."""
+    if period == "hour":
+        return value * _HOURS_PER_MONTH
+    if period == "day":
+        return value * _DAYS_PER_MONTH
+    if period == "month":
+        return value
+    if period == "year":
+        return value / 12
+    return None
 
 
 def now_iso() -> str:
@@ -528,6 +584,54 @@ def mark_telegram_message_deleted(conn: sqlite3.Connection, telegram_message_id:
     conn.commit()
 
 
+# --- Pipeline runs ---------------------------------------------------
+
+
+def insert_pipeline_run(
+    conn: sqlite3.Connection,
+    *,
+    kind: str,
+    started_at: str,
+    finished_at: str,
+    collected_count: int,
+    new_count: int,
+    filtered_out_count: int,
+    scored_count: int,
+    score_failed_count: int,
+    source_counts: dict[str, int],
+    cost_usd: float,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO pipeline_runs (
+            kind, started_at, finished_at, collected_count, new_count,
+            filtered_out_count, scored_count, score_failed_count,
+            source_counts, cost_usd
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            kind,
+            started_at,
+            finished_at,
+            collected_count,
+            new_count,
+            filtered_out_count,
+            scored_count,
+            score_failed_count,
+            json.dumps(source_counts),
+            cost_usd,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def get_recent_pipeline_runs(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+
+
 # --- Aggregates for `job stats` -----------------------------------------
 
 
@@ -568,21 +672,81 @@ def reply_rate_by(
     return {(row["grp"] or "unknown"): (row["replied"], row["total"]) for row in rows}
 
 
-def median_salary_by_tech_tag(conn: sqlite3.Connection) -> dict[str, tuple[float, int]]:
-    """Returns {tag: (median_salary, sample_count)} from the flat tech_stack list."""
+def _midpoint_salary(row: sqlite3.Row) -> float | None:
+    if row["salary_min"] is not None and row["salary_max"] is not None:
+        return (row["salary_min"] + row["salary_max"]) / 2
+    return row["salary_min"] if row["salary_min"] is not None else row["salary_max"]
+
+
+def median_salary_by_tech_tag(conn: sqlite3.Connection) -> dict[str, dict[str, tuple[float, int]]]:
+    """Returns {tag: {currency: (median_monthly_salary, sample_count)}} from
+    the flat tech_stack list. Rows with an unrecognized/missing currency or
+    period are excluded -- see the module-level salary-normalization note."""
     rows = conn.execute(
-        "SELECT tech_stack, salary_min, salary_max FROM postings "
+        "SELECT tech_stack, salary_min, salary_max, salary_currency, salary_period "
+        "FROM postings "
         "WHERE tech_stack IS NOT NULL AND (salary_min IS NOT NULL OR salary_max IS NOT NULL)"
     ).fetchall()
-    by_tag: dict[str, list[float]] = {}
+    by_tag_currency: dict[str, dict[str, list[float]]] = {}
     for row in rows:
-        if row["salary_min"] is not None and row["salary_max"] is not None:
-            value = (row["salary_min"] + row["salary_max"]) / 2
-        else:
-            value = row["salary_min"] if row["salary_min"] is not None else row["salary_max"]
+        currency = normalize_salary_currency(row["salary_currency"])
+        raw = _midpoint_salary(row)
+        monthly = (
+            normalize_salary_to_monthly(raw, row["salary_period"]) if raw is not None else None
+        )
+        if currency is None or monthly is None:
+            continue
         for tag in json.loads(row["tech_stack"] or "[]"):
-            by_tag.setdefault(tag, []).append(value)
-    return {tag: (statistics.median(values), len(values)) for tag, values in by_tag.items()}
+            by_tag_currency.setdefault(tag, {}).setdefault(currency, []).append(monthly)
+    return {
+        tag: {
+            currency: (statistics.median(values), len(values))
+            for currency, values in by_currency.items()
+        }
+        for tag, by_currency in by_tag_currency.items()
+    }
+
+
+def salary_stats_by_currency(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Median monthly-equivalent salary per canonical currency, among scored
+    postings with both a numeric salary and a recognized period. See the
+    module-level salary-normalization note for why currencies aren't
+    combined into one figure."""
+    rows = conn.execute(
+        "SELECT salary_min, salary_max, salary_currency, salary_period FROM postings "
+        "WHERE status = 'scored' AND (salary_min IS NOT NULL OR salary_max IS NOT NULL)"
+    ).fetchall()
+    by_currency: dict[str, list[float]] = {}
+    for row in rows:
+        currency = normalize_salary_currency(row["salary_currency"])
+        raw = _midpoint_salary(row)
+        monthly = (
+            normalize_salary_to_monthly(raw, row["salary_period"]) if raw is not None else None
+        )
+        if currency is None or monthly is None:
+            continue
+        by_currency.setdefault(currency, []).append(monthly)
+    return {
+        currency: {"median_monthly": statistics.median(values), "count": len(values)}
+        for currency, values in by_currency.items()
+    }
+
+
+def stats_by_cv_track(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """Per recommended_cv_track, among scored postings: count and average
+    fit_score. (Reply rate by cv_track -- among submitted applications --
+    is separately available via reply_rate_by("cv_track").)"""
+    rows = conn.execute(
+        "SELECT recommended_cv_track, fit_score FROM postings "
+        "WHERE status = 'scored' AND recommended_cv_track IS NOT NULL"
+    ).fetchall()
+    by_track: dict[str, list[int]] = {}
+    for row in rows:
+        by_track.setdefault(row["recommended_cv_track"], []).append(row["fit_score"])
+    return {
+        track: {"count": len(scores), "avg_fit_score": statistics.mean(scores)}
+        for track, scores in by_track.items()
+    }
 
 
 def required_years_experience_distribution(conn: sqlite3.Connection) -> dict[str, int]:

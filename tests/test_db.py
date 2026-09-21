@@ -269,6 +269,8 @@ def test_median_salary_by_tech_tag(conn):
         tech_stack='["Python"]',
         salary_min=1000.0,
         salary_max=2000.0,
+        salary_currency="USD",
+        salary_period="month",
     )
     db.update_posting_status(
         conn,
@@ -277,12 +279,97 @@ def test_median_salary_by_tech_tag(conn):
         tech_stack='["Python"]',
         salary_min=3000.0,
         salary_max=3000.0,
+        salary_currency="USD",
+        salary_period="month",
     )
 
     by_tag = db.median_salary_by_tech_tag(conn)
-    median, count = by_tag["Python"]
+    median, count = by_tag["Python"]["USD"]
     assert median == 2250.0  # median of [1500, 3000]
     assert count == 2
+
+
+def test_median_salary_by_tech_tag_excludes_unknown_currency_or_period(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    db.update_posting_status(
+        conn, id1, "scored", tech_stack='["Python"]', salary_min=2000.0, salary_currency=None
+    )
+    db.update_posting_status(
+        conn,
+        id2,
+        "scored",
+        tech_stack='["Python"]',
+        salary_min=2000.0,
+        salary_currency="USD",
+        salary_period=None,
+    )
+
+    by_tag = db.median_salary_by_tech_tag(conn)
+    assert by_tag == {}
+
+
+def test_median_salary_by_tech_tag_separates_currencies_and_normalizes_period(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    db.update_posting_status(
+        conn,
+        id1,
+        "scored",
+        tech_stack='["Python"]',
+        salary_min=1200.0,
+        salary_currency="USD",
+        salary_period="year",  # -> 100/month
+    )
+    db.update_posting_status(
+        conn,
+        id2,
+        "scored",
+        tech_stack='["Python"]',
+        salary_min=50000.0,
+        salary_currency="UAH",
+        salary_period="month",
+    )
+
+    by_tag = db.median_salary_by_tech_tag(conn)
+    assert by_tag["Python"]["USD"] == (100.0, 1)
+    assert by_tag["Python"]["UAH"] == (50000.0, 1)
+
+
+def test_salary_stats_by_currency_normalizes_symbol_and_period(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    db.update_posting_status(
+        conn, id1, "scored", salary_min=5000.0, salary_currency="$", salary_period="month"
+    )
+    db.update_posting_status(
+        conn, id2, "scored", salary_min=6000.0, salary_currency="USD", salary_period="month"
+    )
+
+    stats = db.salary_stats_by_currency(conn)
+    assert stats["USD"] == {"median_monthly": 5500.0, "count": 2}
+
+
+def test_stats_by_cv_track_reports_count_and_avg_fit_score(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    db.update_posting_status(
+        conn, id1, "scored", recommended_cv_track="qa_automation", fit_score=60
+    )
+    db.update_posting_status(
+        conn, id2, "scored", recommended_cv_track="qa_automation", fit_score=80
+    )
+
+    stats = db.stats_by_cv_track(conn)
+    assert stats["qa_automation"] == {"count": 2, "avg_fit_score": 70.0}
 
 
 def test_required_years_experience_distribution(conn):

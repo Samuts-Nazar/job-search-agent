@@ -38,15 +38,22 @@ def passes_category_allowlist(posting: Posting, allowed_categories: list[str]) -
 
 
 def _seniority_reject_reason(posting: Posting, *, seniority_strict: bool) -> str | None:
-    """None if the posting passes; otherwise a specific machine-readable reason."""
+    """None if the posting passes; otherwise a specific machine-readable reason.
+
+    Stopwords are matched whole-word against the title only: substring
+    matching against the full text over-rejected postings whose description
+    merely mentioned "architecture" or a "Head of Engineering" contact,
+    not the role's own level. The years-required check stays on the full
+    text -- that number is almost never in the title anyway."""
     stopwords, years_threshold = _stopwords_for(seniority_strict)
-    haystack = f"{posting.title}\n{posting.description}".lower()
+    title = posting.title.lower()
+    full_text = f"{posting.title}\n{posting.description}".lower()
 
     for word in stopwords:
-        if word in haystack:
+        if re.search(rf"\b{re.escape(word)}\b", title):
             return f"seniority_stopword:{word}"
 
-    for match in _YEARS_PATTERN.finditer(haystack):
+    for match in _YEARS_PATTERN.finditer(full_text):
         years = int(match.group(1))
         if years >= years_threshold:
             return f"seniority_years:{years}"

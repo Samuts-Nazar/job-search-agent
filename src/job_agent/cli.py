@@ -83,6 +83,7 @@ def run_pipeline(
     *,
     facts_path: str = data_guard.FACTS_PATH,
 ) -> tuple[list[sqlite3.Row], dict[str, int]]:
+    started_at = db.now_iso()
     typer.echo("Collecting postings...")
     raw_postings = collect_all(config)
     source_counts_this_run = _count_by_source(raw_postings)
@@ -135,6 +136,20 @@ def run_pipeline(
                 scored_rows.append(row)
 
     typer.echo(f"Scored {len(scored_rows)} postings.")
+
+    db.insert_pipeline_run(
+        conn,
+        kind="run",
+        started_at=started_at,
+        finished_at=db.now_iso(),
+        collected_count=len(raw_postings),
+        new_count=len(new_postings),
+        filtered_out_count=len(filtered_out),
+        scored_count=len(scored_rows),
+        score_failed_count=len(kept) - len(scored_rows),
+        source_counts=source_counts_this_run,
+        cost_usd=db.total_cost_usd(conn, since_iso=started_at),
+    )
     return scored_rows, source_counts_this_run
 
 

@@ -1,3 +1,4 @@
+import json
 import shutil
 
 import pytest
@@ -129,6 +130,16 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
         "SELECT ats_vendor FROM postings WHERE title = 'QA Engineer'"
     ).fetchone()
     assert scored_row["ats_vendor"] is None  # https://a/1 isn't a known ATS domain
+
+    runs = db.get_recent_pipeline_runs(conn)
+    assert len(runs) == 1
+    assert runs[0]["kind"] == "run"
+    assert runs[0]["collected_count"] == 2
+    assert runs[0]["new_count"] == 2
+    assert runs[0]["filtered_out_count"] == 1
+    assert runs[0]["scored_count"] == 1
+    assert runs[0]["score_failed_count"] == 0
+    assert json.loads(runs[0]["source_counts"]) == {"djinni": 2}
 
 
 class _NullContextClient:

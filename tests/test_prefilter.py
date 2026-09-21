@@ -80,6 +80,21 @@ def test_prefilter_postings_splits_kept_and_filtered_out():
     assert filtered_by_url["https://djinni.co/jobs/3/"] == "category_not_allowed"
 
 
+def test_seniority_filter_does_not_match_substring_of_stopword():
+    # "architecture" contains "architect" as a substring -- must not trigger
+    posting = make_posting(title="Cloud Architecture QA Engineer")
+    assert prefilter.passes_seniority_filter(posting, seniority_strict=False)
+
+
+def test_seniority_filter_ignores_stopwords_in_description_only():
+    # "Head of Engineering" appears only in the description, not the title
+    posting = make_posting(
+        title="QA Engineer",
+        description="Reports to the Head of Engineering. No architecture experience needed.",
+    )
+    assert prefilter.passes_seniority_filter(posting, seniority_strict=True)
+
+
 def test_seniority_reject_reason_distinguishes_stopword_and_years():
     stopword_posting = make_posting(title="Senior QA Engineer")
     years_posting = make_posting(description="Requires 7 years of experience.")
