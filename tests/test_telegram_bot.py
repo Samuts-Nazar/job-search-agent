@@ -129,6 +129,19 @@ def test_skip_posting_updates_status(conn):
     assert row["status"] == "skipped"
 
 
+def test_get_pending_rows_filters_by_min_score(conn):
+    low_id = insert_scored_posting(conn, url="https://djinni.co/jobs/low/", fit_score=10)
+    high_id = insert_scored_posting(
+        conn, url="https://djinni.co/jobs/high/", fit_score=90, dedup_hash="hash2"
+    )
+
+    rows = telegram_bot.get_pending_rows(conn, min_score=40)
+
+    ids = {row["id"] for row in rows}
+    assert ids == {high_id}
+    assert low_id not in ids
+
+
 @dataclass
 class _SentMessage:
     message_id: int

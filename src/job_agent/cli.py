@@ -159,9 +159,9 @@ async def _send_digest(
         await bot.session.close()
 
 
-async def _poll(conn: sqlite3.Connection, secrets: Secrets) -> None:
+async def _poll(conn: sqlite3.Connection, secrets: Secrets, min_score: int) -> None:
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
-    dispatcher = telegram_bot.build_dispatcher(conn)
+    dispatcher = telegram_bot.build_dispatcher(conn, min_score)
     try:
         await dispatcher.start_polling(bot)
     finally:
@@ -231,7 +231,7 @@ def main(
             typer.echo(
                 "Pipeline run complete. Listening for Telegram interaction (Ctrl+C to stop)..."
             )
-            asyncio.run(_poll(conn, secrets))
+            asyncio.run(_poll(conn, secrets, config.telegram.min_score))
     except KeyboardInterrupt:
         typer.echo("Shutting down.")
     except FileNotFoundError as exc:

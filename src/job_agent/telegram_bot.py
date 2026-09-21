@@ -120,18 +120,30 @@ def skip_posting(conn: sqlite3.Connection, posting_id: int) -> None:
     db.update_posting_status(conn, posting_id, "skipped")
 
 
-def build_router(conn: sqlite3.Connection) -> Router:
+def get_pending_rows(conn: sqlite3.Connection, min_score: int) -> list[sqlite3.Row]:
+    """Same min_score filter as the initial digest send (item 10) --
+    without it /pending resends a card for every scored posting ever
+    collected, which spams the chat on a DB with any real history."""
+    return [
+        row
+        for row in db.get_postings_by_status(conn, "scored")
+        if row["fit_score"] is not None and row["fit_score"] >= min_score
+    ]
+
+
+def build_router(conn: sqlite3.Connection, min_score: int) -> Router:
     router = Router()
 
     @router.message(Command("pending"))
     async def handle_pending(message: Message) -> None:
-        rows = db.get_postings_by_status(conn, "scored")
+        rows = get_pending_rows(conn, min_score)
         if not rows:
             await message.answer("No postings awaiting a decision.")
             return
         for row in rows:
             text, keyboard = format_posting_card(row)
-            await message.answer(text, reply_markup=keyboard)
+            sent = await message.answer(text, reply_markup=keyboard)
+            db.insert_telegram_message(conn, posting_id=row["id"], message_id=sent.message_id)
 
     @router.message(Command("stats"))
     async def handle_stats(message: Message) -> None:
@@ -212,7 +224,7 @@ def build_bot(token: str) -> Bot:
     return Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
-def build_dispatcher(conn: sqlite3.Connection) -> Dispatcher:
+def build_dispatcher(conn: sqlite3.Connection, min_score: int) -> Dispatcher:
     dispatcher = Dispatcher()
-    dispatcher.include_router(build_router(conn))
+    dispatcher.include_router(build_router(conn, min_score))
     return dispatcher
