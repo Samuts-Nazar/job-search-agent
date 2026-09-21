@@ -96,11 +96,19 @@ def format_stats(
     return "\n".join(lines)
 
 
+MARK_USAGE = f"Usage: /mark POSTING_ID {'|'.join(sorted(MANUAL_STATUSES))}"
+
+
 def parse_mark_command(text: str) -> tuple[int, str] | str:
-    """Returns (posting_id, status) on success, or an error message string."""
+    """Returns (posting_id, status) on success, or an error message string.
+
+    Every returned string is sent via bot.send_message under the bot's
+    default ParseMode.HTML (see build_bot) -- literal "<...>" placeholders
+    (e.g. "<id>") 400 there as an unrecognized tag, so error text must stay
+    free of angle brackets."""
     parts = (text or "").split()
     if len(parts) != 3:
-        return "Usage: /mark <id> <replied|rejected|interview>"
+        return MARK_USAGE
     _, raw_id, status = parts
     if status not in MANUAL_STATUSES:
         return f"Status must be one of: {', '.join(sorted(MANUAL_STATUSES))}"

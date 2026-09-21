@@ -94,14 +94,22 @@ def test_posting_action_pack_and_unpack():
     [
         ("/mark 1 replied", (1, "replied")),
         ("/mark 2 rejected", (2, "rejected")),
-        ("/mark", "Usage: /mark <id> <replied|rejected|interview>"),
-        ("/mark 1", "Usage: /mark <id> <replied|rejected|interview>"),
+        ("/mark", telegram_bot.MARK_USAGE),
+        ("/mark 1", telegram_bot.MARK_USAGE),
         ("/mark abc replied", "Posting id must be a number."),
     ],
 )
 def test_parse_mark_command(text, expected):
     result = telegram_bot.parse_mark_command(text)
     assert result == expected
+
+
+def test_mark_usage_has_no_html_unsafe_brackets():
+    """Sent via bot.send_message under the bot's default ParseMode.HTML --
+    a literal "<id>" placeholder previously 400'd there as an unrecognized
+    tag (confirmed live 2026-09-22)."""
+    assert "<" not in telegram_bot.MARK_USAGE
+    assert ">" not in telegram_bot.MARK_USAGE
 
 
 def test_parse_mark_command_rejects_unknown_status():
