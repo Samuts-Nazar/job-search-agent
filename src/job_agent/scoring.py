@@ -20,7 +20,7 @@ import httpx
 from pydantic import ValidationError
 
 from job_agent import db
-from job_agent.config import Config, ModelEntry
+from job_agent.config import Config, ModelEntry, ThresholdConfig
 from job_agent.db import Posting
 from job_agent.llm.client import (
     CompletionResult,
@@ -30,10 +30,20 @@ from job_agent.llm.client import (
     parse_json_content,
 )
 from job_agent.llm.prompts import SCORING_PROMPT_VERSION, render_scoring_prompt
-from job_agent.llm.schemas import SCORING_JSON_SCHEMA, ScoringResult
+from job_agent.llm.schemas import SCORING_JSON_SCHEMA, ScoringResult, Verdict
 
 MAX_RETRIES_PER_MODEL = 2
 SYSTEM_PROMPT = "You are a precise, conservative job-fit scorer."
+
+
+def derive_verdict(fit_score: int, threshold: ThresholdConfig) -> Verdict:
+    """apply/maybe/skip is derived from fit_score in code, not by the
+    model -- see llm/schemas.py's module docstring for why."""
+    if fit_score >= threshold.fit_score_min:
+        return "apply"
+    if fit_score >= threshold.maybe_score_min:
+        return "maybe"
+    return "skip"
 
 
 def _attempt_score(
@@ -61,10 +71,10 @@ def _attempt_score(
     return ScoringResult.model_validate(data), completion
 
 
-def _result_fields(scoring_result: ScoringResult) -> dict[str, object]:
+def _result_fields(scoring_result: ScoringResult, verdict: Verdict) -> dict[str, object]:
     return {
         "fit_score": scoring_result.fit_score,
-        "verdict": scoring_result.verdict,
+        "verdict": verdict,
         "matched_skills": json.dumps(scoring_result.matched_skills),
         "missing_skills": json.dumps(scoring_result.missing_skills),
         "seniority_match": scoring_result.seniority_match,
@@ -138,7 +148,8 @@ def score_posting(
                 output_tokens=completion.output_tokens,
                 cost_usd=completion.cost_usd,
             )
-            fields = _result_fields(scoring_result)
+            verdict = derive_verdict(scoring_result.fit_score, config.active_threshold)
+            fields = _result_fields(scoring_result, verdict)
             db.insert_scoring_run(
                 conn,
                 posting_id=posting_id,

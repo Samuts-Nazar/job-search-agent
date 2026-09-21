@@ -5,7 +5,6 @@ from job_agent.llm.schemas import ScoringResult, TechTag
 
 VALID = {
     "fit_score": 75,
-    "verdict": "apply",
     "matched_skills": ["Python", "pytest"],
     "missing_skills": ["Kubernetes"],
     "seniority_match": "match",
@@ -22,7 +21,6 @@ VALID = {
 def test_scoring_result_accepts_valid_payload():
     result = ScoringResult.model_validate(VALID)
     assert result.fit_score == 75
-    assert result.verdict == "apply"
 
 
 def test_scoring_result_rejects_out_of_range_fit_score():
@@ -30,9 +28,11 @@ def test_scoring_result_rejects_out_of_range_fit_score():
         ScoringResult.model_validate({**VALID, "fit_score": 150})
 
 
-def test_scoring_result_rejects_unknown_verdict():
-    with pytest.raises(ValidationError):
-        ScoringResult.model_validate({**VALID, "verdict": "maybe-ish"})
+def test_scoring_result_has_no_verdict_field():
+    """verdict is derived in code (scoring.derive_verdict), not model
+    output -- see llm/schemas.py's module docstring."""
+    result = ScoringResult.model_validate(VALID)
+    assert not hasattr(result, "verdict")
 
 
 def test_scoring_result_allows_null_salary():

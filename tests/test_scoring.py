@@ -9,7 +9,6 @@ from job_agent.llm.schemas import ScoringResult
 
 VALID_RESULT = ScoringResult(
     fit_score=80,
-    verdict="apply",
     matched_skills=["Python"],
     missing_skills=[],
     seniority_match="match",
@@ -30,6 +29,22 @@ VALID_RESULT = ScoringResult(
     salary_currency="USD",
     salary_period="month",
 )
+
+
+@pytest.mark.parametrize(
+    "fit_score, expected",
+    [
+        (100, "apply"),
+        (40, "apply"),
+        (39, "maybe"),
+        (20, "maybe"),
+        (19, "skip"),
+        (0, "skip"),
+    ],
+)
+def test_derive_verdict_boundaries(fit_score, expected):
+    threshold = ThresholdConfig(fit_score_min=40, maybe_score_min=20)
+    assert scoring.derive_verdict(fit_score, threshold) == expected
 
 
 @pytest.fixture

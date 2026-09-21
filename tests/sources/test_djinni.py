@@ -1,9 +1,21 @@
 import json
 from pathlib import Path
 
-from job_agent.sources.djinni import parse_djinni_rss
+import httpx
+
+from job_agent.db import Posting
+from job_agent.sources.djinni import backfill_company, parse_djinni_company, parse_djinni_rss
 
 FIXTURE = Path(__file__).parent / "fixtures" / "djinni_rss_qa_automation.xml"
+
+# Real og:title snippets, verified live 2026-09-22 against
+# https://djinni.co/jobs/819756-tech-support-engineer-l2/ and similar pages.
+OG_TITLE_HTML = (
+    '<html><head>'
+    '<meta property="og:title" content="Tech Support Engineer (L2) в Zvook " />'
+    '</head><body></body></html>'
+)
+OG_TITLE_HTML_NO_COMPANY = "<html><head><title>Djinni</title></head><body></body></html>"
 
 
 def test_parse_djinni_rss_returns_normalized_postings():
@@ -36,3 +48,58 @@ def test_parse_djinni_rss_captures_raw_payload():
     payload = json.loads(first.raw_payload)
     assert payload["title"] == first.title
     assert payload["link"] == first.url
+
+
+def test_parse_djinni_company_extracts_from_og_title():
+    assert parse_djinni_company(OG_TITLE_HTML) == "Zvook"
+
+
+def test_parse_djinni_company_returns_none_when_tag_missing():
+    assert parse_djinni_company(OG_TITLE_HTML_NO_COMPANY) is None
+
+
+def _make_posting(**overrides) -> Posting:
+    defaults = dict(
+        source="djinni",
+        url="https://djinni.co/jobs/819756-tech-support-engineer-l2/",
+        title="Tech Support Engineer (L2)",
+        description="desc",
+    )
+    defaults.update(overrides)
+    return Posting(**defaults)
+
+
+def test_backfill_company_sets_company_from_live_page():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=OG_TITLE_HTML)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    posting = _make_posting()
+
+    backfill_company(client, posting)
+
+    assert posting.company == "Zvook"
+
+
+def test_backfill_company_skips_if_already_set():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("should not fetch when company is already set")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    posting = _make_posting(company="Already Known")
+
+    backfill_company(client, posting)
+
+    assert posting.company == "Already Known"
+
+
+def test_backfill_company_leaves_none_on_http_error(monkeypatch):
+    def fake_fetch(client, url):
+        raise httpx.ConnectError("boom")
+
+    monkeypatch.setattr("job_agent.sources.djinni.fetch_djinni_posting_page", fake_fetch)
+    posting = _make_posting()
+
+    backfill_company(object(), posting)
+
+    assert posting.company is None

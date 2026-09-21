@@ -80,7 +80,6 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
 
     valid_result = ScoringResult(
         fit_score=80,
-        verdict="apply",
         matched_skills=["Python"],
         missing_skills=[],
         seniority_match="match",
@@ -101,7 +100,7 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
             posting_id,
             "scored",
             fit_score=valid_result.fit_score,
-            verdict=valid_result.verdict,
+            verdict=cli.scoring.derive_verdict(valid_result.fit_score, config.active_threshold),
         )
         return valid_result
 

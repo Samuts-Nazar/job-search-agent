@@ -8,6 +8,7 @@ recorded fixtures without any network access.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 
 import feedparser
@@ -56,3 +57,16 @@ def entry_raw_payload(entry: feedparser.FeedParserDict) -> str:
     default=str covers non-JSON-native values (e.g. time.struct_time on
     the *_parsed fields)."""
     return json.dumps(dict(entry), default=str, ensure_ascii=False)
+
+
+_TITLE_COMPANY_UK_RE = re.compile(r"^(?P<title>.+?)\s+в\s+(?P<company>.+?)\s*$")
+
+
+def parse_title_company_uk(text: str) -> tuple[str, str | None]:
+    """Splits "<title> в <company>" (Ukrainian "at/in"), the pattern DOU's
+    RSS titles and Djinni's page og:title both embed the company in.
+    Returns (text, None) unchanged if the pattern doesn't match."""
+    match = _TITLE_COMPANY_UK_RE.match(text)
+    if not match:
+        return text, None
+    return match.group("title").strip(), match.group("company").strip()

@@ -19,7 +19,14 @@ ReasoningSetting = Literal["none", "minimal", "low", "medium", "high", "omit"]
 
 
 class ThresholdConfig(BaseModel):
+    """fit_score_min / maybe_score_min define the verdict bands the model's
+    fit_score is sorted into (verdict is no longer LLM output -- see
+    scoring.derive_verdict): >= fit_score_min -> "apply", >= maybe_score_min
+    -> "maybe", else "skip". Unrelated to telegram.min_score (TelegramConfig
+    below), which only controls which cards get sent."""
+
     fit_score_min: int = Field(ge=0, le=100)
+    maybe_score_min: int = Field(ge=0, le=100, default=20)
     salary_floor_usd: int | None = None
     seniority_strict: bool = False
 
@@ -99,6 +106,13 @@ class BudgetConfig(BaseModel):
     monthly_usd: float = 10.0
 
 
+class TelegramConfig(BaseModel):
+    """Decoupled from the scoring/analysis thresholds above: min_score only
+    controls which scored postings get a card sent to Telegram."""
+
+    min_score: int = Field(ge=0, le=100, default=40)
+
+
 class Config(BaseModel):
     mode: Mode = "wide"
     thresholds: dict[Mode, ThresholdConfig]
@@ -106,6 +120,7 @@ class Config(BaseModel):
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     categories: list[str] = Field(default_factory=list)
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
     @property
     def active_threshold(self) -> ThresholdConfig:

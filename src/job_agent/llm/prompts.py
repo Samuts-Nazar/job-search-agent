@@ -15,7 +15,7 @@ PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
 # The version currently used for live scoring -- stored alongside every
 # scoring_runs row (db.py) so results stay attributable to the prompt that
 # produced them even after this constant moves on.
-SCORING_PROMPT_VERSION = "scoring_v3"
+SCORING_PROMPT_VERSION = "scoring_v4"
 
 
 def load_prompt_template(name: str) -> Template:

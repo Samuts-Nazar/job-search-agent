@@ -19,7 +19,7 @@ def _make_client(handler) -> httpx.Client:
 
 
 VALID_CONTENT = (
-    '{"fit_score": 80, "verdict": "apply", "matched_skills": ["Python"], '
+    '{"fit_score": 80, "matched_skills": ["Python"], '
     '"missing_skills": [], "seniority_match": "match", "required_languages": ["English"], '
     '"language_mismatch": false, "relocation_offered": "unknown", "remote_type": "remote", '
     '"salary": null, "recommended_cv_track": "qa_automation", "rationale": "Good fit."}'

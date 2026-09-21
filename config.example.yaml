@@ -4,12 +4,18 @@ mode: wide  # wide | selective
 
 thresholds:
   # Placeholder defaults -- tune after the first few real runs (see job stats).
+  # fit_score_min / maybe_score_min define the apply/maybe/skip bands a
+  # posting's fit_score is sorted into (verdict is derived in code from
+  # fit_score, not model output -- see job_agent/scoring.py:derive_verdict).
+  # >= fit_score_min -> apply, >= maybe_score_min -> maybe, else skip.
   wide:
     fit_score_min: 40
+    maybe_score_min: 20
     salary_floor_usd: null
     seniority_strict: false
   selective:
     fit_score_min: 70
+    maybe_score_min: 40
     salary_floor_usd: null
     seniority_strict: true
 
@@ -79,3 +85,11 @@ categories: ["QA", "QA Automation", "Support", "Sysadmin", "ML AI", "Python"]
 
 budget:
   monthly_usd: 10
+
+telegram:
+  # Decoupled from thresholds.*.fit_score_min above: min_score only
+  # controls which scored postings get a card sent to Telegram, independent
+  # of the apply/maybe/skip thresholds used for analysis (job stats, job
+  # export, job analyze --rescore). `job --no-telegram` skips sending
+  # entirely regardless of this value.
+  min_score: 40

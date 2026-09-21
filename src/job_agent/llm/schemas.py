@@ -18,6 +18,12 @@ Note: seniority_label duplicates seniority_level (both are "the posting's
 own stated level, as written") -- added because it was requested by name
 in a later data-collection pass; kept as a separate field rather than
 silently dropped, but the two should probably be consolidated later.
+
+verdict is NOT part of this schema -- it used to be model output, but a
+real run showed the same fit_score getting different verdicts across
+postings (the model's own apply/maybe/skip judgment was inconsistent).
+It's now derived deterministically in code from fit_score using
+config.yaml's per-mode thresholds; see scoring.derive_verdict().
 """
 
 from __future__ import annotations
@@ -40,7 +46,6 @@ class TechTag(BaseModel):
 
 class ScoringResult(BaseModel):
     fit_score: int = Field(ge=0, le=100)
-    verdict: Verdict
     matched_skills: list[str]
     missing_skills: list[str]
     seniority_match: SeniorityMatch
@@ -85,7 +90,6 @@ SCORING_JSON_SCHEMA: dict = {
     "type": "object",
     "properties": {
         "fit_score": {"type": "integer", "minimum": 0, "maximum": 100},
-        "verdict": {"type": "string", "enum": ["apply", "maybe", "skip"]},
         "matched_skills": {"type": "array", "items": {"type": "string"}},
         "missing_skills": {"type": "array", "items": {"type": "string"}},
         "seniority_match": {"type": "string", "enum": ["under", "match", "over"]},
@@ -115,7 +119,6 @@ SCORING_JSON_SCHEMA: dict = {
     },
     "required": [
         "fit_score",
-        "verdict",
         "matched_skills",
         "missing_skills",
         "seniority_match",
