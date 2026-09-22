@@ -66,8 +66,30 @@ def test_collect_all_combines_sources(monkeypatch, config):
     monkeypatch.setattr(cli, "collect_wwr", lambda c: [])
     monkeypatch.setattr(cli, "collect_linkedin", lambda c: [])
 
-    postings = cli.collect_all(config)
+    postings, failed = cli.collect_all(config)
     assert len(postings) == 2
+    assert failed == []
+
+
+def test_collect_all_isolates_a_failing_source(monkeypatch, config):
+    def broken_collect_dou(c):
+        raise ConnectionError("dou is down")
+
+    monkeypatch.setattr(
+        cli, "collect_djinni", lambda c, conn=None: [make_posting(url="https://a/1")]
+    )
+    monkeypatch.setattr(cli, "collect_dou", broken_collect_dou)
+    monkeypatch.setattr(
+        cli, "collect_remoteok", lambda c: [make_posting(url="https://a/2")]
+    )
+    monkeypatch.setattr(cli, "collect_wwr", lambda c: [])
+    monkeypatch.setattr(cli, "collect_linkedin", lambda c: [])
+
+    postings, failed = cli.collect_all(config)
+
+    # the other 4 sources' postings still come back
+    assert {p.url for p in postings} == {"https://a/1", "https://a/2"}
+    assert failed == ["dou"]
 
 
 def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
@@ -76,7 +98,9 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
         url="https://a/2", title="Senior QA Architect", raw_tags=["QA"]
     )
 
-    monkeypatch.setattr(cli, "collect_all", lambda c, conn=None: [kept_posting, filtered_posting])
+    monkeypatch.setattr(
+        cli, "collect_all", lambda c, conn=None: ([kept_posting, filtered_posting], [])
+    )
     monkeypatch.setattr(cli.facts, "load_facts", lambda path: {})
     monkeypatch.setattr(cli.facts, "render_facts_summary", lambda data: "facts")
     monkeypatch.setattr(cli, "make_client", lambda api_key: _NullContextClient())
@@ -114,7 +138,10 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
         telegram_bot_token = "token"
         telegram_chat_id = "chat"
 
-    scored_rows, source_counts_this_run = cli.run_pipeline(config, DummySecrets(), conn)
+    scored_rows, source_counts_this_run, failed_sources = cli.run_pipeline(
+        config, DummySecrets(), conn
+    )
+    assert failed_sources == []
 
     assert source_counts_this_run == {"djinni": 2}
     assert len(scored_rows) == 1
@@ -142,6 +169,69 @@ def test_run_pipeline_inserts_filters_and_scores(monkeypatch, config, conn):
     assert runs[0]["scored_count"] == 1
     assert runs[0]["score_failed_count"] == 0
     assert json.loads(runs[0]["source_counts"]) == {"djinni": 2}
+
+
+def test_run_pipeline_under_ci_mode_never_prints_posting_or_fact_content(
+    monkeypatch, config, conn, capsys
+):
+    """Public-repo Actions logs are world-readable -- under JOB_CI, no
+    posting title/description or fact value may ever reach stdout/stderr,
+    even indirectly via an exception message."""
+    monkeypatch.setattr(cli, "CI_MODE", True)
+
+    secret_marker = "ZzMarkerCandidateNameZz"
+    posting_marker = "ZzMarkerPostingTitleZz"
+
+    kept_posting = make_posting(
+        url="https://a/1", title=f"QA Engineer {posting_marker}", raw_tags=["QA"]
+    )
+    monkeypatch.setattr(cli, "collect_all", lambda c, conn=None: ([kept_posting], []))
+    monkeypatch.setattr(
+        cli.facts, "load_facts", lambda path: {"candidate": {"name": secret_marker}}
+    )
+    monkeypatch.setattr(cli.facts, "render_facts_summary", lambda data: secret_marker)
+    monkeypatch.setattr(cli, "make_client", lambda api_key: _NullContextClient())
+
+    valid_result = ScoringResult(
+        fit_score=80,
+        matched_skills=["Python"],
+        missing_skills=[],
+        seniority_match="match",
+        required_languages=["English"],
+        language_mismatch=False,
+        relocation_offered="unknown",
+        remote_type="remote",
+        salary=None,
+        recommended_cv_track="qa_automation",
+        rationale="Good fit.",
+    )
+
+    def fake_score_posting(
+        conn_, client, *, posting_id, posting, config, facts_summary, reasoning_overrides=None
+    ):
+        db.update_posting_status(
+            conn_,
+            posting_id,
+            "scored",
+            fit_score=valid_result.fit_score,
+            verdict=cli.scoring.derive_verdict(valid_result.fit_score, config.active_threshold),
+        )
+        return valid_result
+
+    monkeypatch.setattr(cli.scoring, "score_posting", fake_score_posting)
+
+    class DummySecrets:
+        openrouter_api_key = "key"
+        telegram_bot_token = "token"
+        telegram_chat_id = "chat"
+
+    cli.run_pipeline(config, DummySecrets(), conn)
+
+    captured = capsys.readouterr()
+    assert secret_marker not in captured.out
+    assert secret_marker not in captured.err
+    assert posting_marker not in captured.out
+    assert posting_marker not in captured.err
 
 
 class _NullContextClient:
@@ -294,6 +384,28 @@ def test_export_command_rejects_unsupported_format(tmp_path):
         cli.app, ["export", "--db", str(db_path), "--format", "json"]
     )
     assert result.exit_code == 1
+
+
+def test_echo_error_shows_full_message_outside_ci_mode(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "CI_MODE", False)
+    cli._echo_error(FileNotFoundError("data/facts.yaml not found"))
+    assert "data/facts.yaml not found" in capsys.readouterr().err
+
+
+def test_echo_error_hides_message_under_ci_mode(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "CI_MODE", True)
+    cli._echo_error(FileNotFoundError("data/facts.yaml not found"))
+    err = capsys.readouterr().err
+    assert "data/facts.yaml not found" not in err
+    assert "FileNotFoundError" in err
+
+
+def test_echo_error_prefix_always_shown(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "CI_MODE", True)
+    cli._echo_error(ValueError("secret leaked value"), prefix="Missing secrets: ")
+    err = capsys.readouterr().err
+    assert err.startswith("Missing secrets: ")
+    assert "secret leaked value" not in err
 
 
 def test_posting_from_row_reconstructs_posting(tmp_path):
@@ -475,7 +587,9 @@ def _prepare_main_invocation(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.data_guard, "check_data_safety", lambda facts_path, answers_path: [])
     monkeypatch.setattr(
-        cli, "run_pipeline", lambda config, secrets, conn, facts_path=None: ([], {"djinni": 0})
+        cli,
+        "run_pipeline",
+        lambda config, secrets, conn, facts_path=None: ([], {"djinni": 0}, []),
     )
     return config_path, env_path, db_path
 
@@ -537,6 +651,40 @@ def test_main_without_no_telegram_sends_and_polls(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert send_calls == [1]
     assert poll_calls == [1]
+
+
+def test_main_no_poll_sends_digest_but_skips_poll(monkeypatch, tmp_path):
+    config_path, env_path, db_path = _prepare_main_invocation(monkeypatch, tmp_path)
+
+    send_calls = []
+    poll_calls = []
+
+    async def fake_send_digest(*args, **kwargs):
+        send_calls.append(1)
+
+    async def fake_poll(*args, **kwargs):
+        poll_calls.append(1)
+
+    monkeypatch.setattr(cli, "_send_digest", fake_send_digest)
+    monkeypatch.setattr(cli, "_poll", fake_poll)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--db",
+            str(db_path),
+            "--no-poll",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert send_calls == [1]
+    assert poll_calls == []
+    assert "not polling" in result.output
 
 
 def test_telegram_cleanup_command_reports_counts(monkeypatch, tmp_path):

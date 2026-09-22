@@ -47,6 +47,12 @@ def test_format_digest():
     assert "dou: 2" in text
     assert "apply: 1" in text
     assert "skip: 4" in text
+    assert "Failed" not in text
+
+
+def test_format_digest_shows_failed_sources():
+    text = telegram_bot.format_digest({"djinni": 3}, {"apply": 1}, failed_sources=["dou", "wwr"])
+    assert "Failed: dou, wwr" in text
 
 
 def test_format_posting_card_shows_flags(conn):

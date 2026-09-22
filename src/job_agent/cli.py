@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
+from collections.abc import Callable
 
 import httpx
 import typer
@@ -37,15 +39,40 @@ DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_DB_PATH = "data/jobs.db"
 DEFAULT_ENV_PATH = ".env"
 
+# Set by the GitHub Actions workflows (never locally): public-repo Actions
+# logs are world-readable, so under JOB_CI=1 an exception's own message --
+# which could embed a file path, an HTTP response body, or other content
+# from the private data repo -- is never printed, only its type name.
+CI_MODE = os.environ.get("JOB_CI") == "1"
 
-def collect_all(config: Config, conn: sqlite3.Connection | None = None) -> list[Posting]:
+
+def _echo_error(exc: Exception, *, prefix: str = "") -> None:
+    message = type(exc).__name__ if CI_MODE else str(exc)
+    typer.echo(f"{prefix}{message}", err=True)
+
+
+def collect_all(
+    config: Config, conn: sqlite3.Connection | None = None
+) -> tuple[list[Posting], list[str]]:
+    """Each source is isolated: one failing (e.g. a source blocking a
+    datacenter IP a CI runner uses) must not abort collection from the
+    other four. Returns (postings, failed_source_names)."""
     postings: list[Posting] = []
-    postings.extend(collect_djinni(config.sources.djinni, conn=conn))
-    postings.extend(collect_dou(config.sources.dou))
-    postings.extend(collect_remoteok(config.sources.remoteok))
-    postings.extend(collect_wwr(config.sources.wwr))
-    postings.extend(collect_linkedin(config.sources.linkedin))
-    return postings
+    failed: list[str] = []
+    sources: list[tuple[str, Callable[[], list[Posting]]]] = [
+        ("djinni", lambda: collect_djinni(config.sources.djinni, conn=conn)),
+        ("dou", lambda: collect_dou(config.sources.dou)),
+        ("remoteok", lambda: collect_remoteok(config.sources.remoteok)),
+        ("wwr", lambda: collect_wwr(config.sources.wwr)),
+        ("linkedin", lambda: collect_linkedin(config.sources.linkedin)),
+    ]
+    for name, collect in sources:
+        try:
+            postings.extend(collect())
+        except Exception as exc:  # noqa: BLE001 -- isolate each source deliberately
+            typer.echo(f"{name} collection failed: {type(exc).__name__}", err=True)
+            failed.append(name)
+    return postings, failed
 
 
 def _count_by_source(postings: list[Posting]) -> dict[str, int]:
@@ -83,10 +110,10 @@ def run_pipeline(
     conn: sqlite3.Connection,
     *,
     facts_path: str = data_guard.FACTS_PATH,
-) -> tuple[list[sqlite3.Row], dict[str, int]]:
+) -> tuple[list[sqlite3.Row], dict[str, int], list[str]]:
     started_at = db.now_iso()
     typer.echo("Collecting postings...")
-    raw_postings = collect_all(config, conn)
+    raw_postings, failed_sources = collect_all(config, conn)
     source_counts_this_run = _count_by_source(raw_postings)
     typer.echo(f"Collected {len(raw_postings)} postings: {source_counts_this_run}")
 
@@ -151,7 +178,7 @@ def run_pipeline(
         source_counts=source_counts_this_run,
         cost_usd=db.total_cost_usd(conn, since_iso=started_at),
     )
-    return scored_rows, source_counts_this_run
+    return scored_rows, source_counts_this_run, failed_sources
 
 
 async def _send_digest(
@@ -160,6 +187,7 @@ async def _send_digest(
     source_counts: dict[str, int],
     scored_rows: list[sqlite3.Row],
     fit_score_min: int,
+    failed_sources: list[str] | None = None,
 ) -> None:
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
     try:
@@ -170,6 +198,7 @@ async def _send_digest(
             source_counts=source_counts,
             scored_rows=scored_rows,
             fit_score_min=fit_score_min,
+            failed_sources=failed_sources,
         )
     finally:
         await bot.session.close()
@@ -207,6 +236,12 @@ def main(
     no_telegram: bool = typer.Option(
         False, "--no-telegram", help="Collect and score only -- send or poll nothing."
     ),
+    no_poll: bool = typer.Option(
+        False,
+        "--no-poll",
+        help="Send the digest but don't poll for Telegram interaction afterward "
+        "(for when something else, e.g. a separate scheduled process, handles it).",
+    ),
 ) -> None:
     """Run the full pipeline once, then stay up for Telegram interaction (Ctrl+C to stop)."""
     if ctx.invoked_subcommand is not None:
@@ -216,10 +251,10 @@ def main(
         config = load_config(config_path)
         secrets = load_secrets(env_path)
     except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
+        _echo_error(exc)
         raise typer.Exit(code=1) from exc
     except ValidationError as exc:
-        typer.echo(f"Missing or invalid secrets in {env_path}: {exc}", err=True)
+        _echo_error(exc, prefix=f"Missing or invalid secrets in {env_path}: ")
         raise typer.Exit(code=1) from exc
 
     data_results = data_guard.check_data_safety(facts_path, answers_path)
@@ -232,7 +267,7 @@ def main(
     db.init_db(conn)
 
     try:
-        scored_rows, source_counts_this_run = run_pipeline(
+        scored_rows, source_counts_this_run, failed_sources = run_pipeline(
             config, secrets, conn, facts_path=facts_path
         )
         if no_telegram:
@@ -241,17 +276,26 @@ def main(
             typer.echo("Sending Telegram digest...")
             asyncio.run(
                 _send_digest(
-                    secrets, conn, source_counts_this_run, scored_rows, config.telegram.min_score
+                    secrets,
+                    conn,
+                    source_counts_this_run,
+                    scored_rows,
+                    config.telegram.min_score,
+                    failed_sources,
                 )
             )
-            typer.echo(
-                "Pipeline run complete. Listening for Telegram interaction (Ctrl+C to stop)..."
-            )
-            asyncio.run(_poll(conn, secrets, config.telegram.min_score))
+            if no_poll:
+                typer.echo("--no-poll set: digest sent, not polling.")
+            else:
+                typer.echo(
+                    "Pipeline run complete. Listening for Telegram interaction "
+                    "(Ctrl+C to stop)..."
+                )
+                asyncio.run(_poll(conn, secrets, config.telegram.min_score))
     except KeyboardInterrupt:
         typer.echo("Shutting down.")
     except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
+        _echo_error(exc)
         raise typer.Exit(code=1) from exc
     finally:
         conn.close()
@@ -284,7 +328,7 @@ def export(
     try:
         counts = export_module.export_all(conn, out_dir, fmt=fmt)
     except ValueError as exc:
-        typer.echo(str(exc), err=True)
+        _echo_error(exc)
         raise typer.Exit(code=1) from exc
     finally:
         conn.close()
@@ -326,7 +370,7 @@ def render_test(
     try:
         pdf_path = render_cv(content, output_path)
     except RenderError as exc:
-        typer.echo(str(exc), err=True)
+        _echo_error(exc)
         raise typer.Exit(code=1) from exc
     typer.echo(f"Rendered {pdf_path}")
 
@@ -366,7 +410,7 @@ def eval_command(
         config = load_config(config_path)
         secrets = load_secrets(env_path)
     except (FileNotFoundError, ValidationError) as exc:
-        typer.echo(str(exc), err=True)
+        _echo_error(exc)
         raise typer.Exit(code=1) from exc
 
     facts_summary = _load_facts_summary_for_eval()
@@ -451,10 +495,10 @@ def analyze(
         config = load_config(config_path)
         secrets = load_secrets(env_path)
     except FileNotFoundError as exc:
-        typer.echo(str(exc), err=True)
+        _echo_error(exc)
         raise typer.Exit(code=1) from exc
     except ValidationError as exc:
-        typer.echo(f"Missing or invalid secrets in {env_path}: {exc}", err=True)
+        _echo_error(exc, prefix=f"Missing or invalid secrets in {env_path}: ")
         raise typer.Exit(code=1) from exc
 
     conn = db.connect(db_path)
@@ -513,7 +557,7 @@ def telegram_cleanup(
     try:
         secrets = load_secrets(env_path)
     except ValidationError as exc:
-        typer.echo(f"Missing or invalid secrets in {env_path}: {exc}", err=True)
+        _echo_error(exc, prefix=f"Missing or invalid secrets in {env_path}: ")
         raise typer.Exit(code=1) from exc
 
     conn = db.connect(db_path)

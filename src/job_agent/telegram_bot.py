@@ -32,10 +32,16 @@ class PostingAction(CallbackData, prefix="posting"):
     posting_id: int
 
 
-def format_digest(source_counts: dict[str, int], verdict_counts: dict[str, int]) -> str:
+def format_digest(
+    source_counts: dict[str, int],
+    verdict_counts: dict[str, int],
+    failed_sources: list[str] | None = None,
+) -> str:
     lines = ["<b>Run digest</b>", "", "By source:"]
     for source, count in sorted(source_counts.items()):
         lines.append(f"  {source}: {count}")
+    if failed_sources:
+        lines.append(f"  Failed: {', '.join(sorted(failed_sources))}")
     lines.append("")
     lines.append("By verdict:")
     for verdict, count in sorted(verdict_counts.items()):
@@ -189,6 +195,7 @@ async def send_digest_and_cards(
     source_counts: dict[str, int],
     scored_rows: list[sqlite3.Row],
     fit_score_min: int,
+    failed_sources: list[str] | None = None,
 ) -> None:
     """fit_score_min here is config.telegram.min_score -- which cards get
     sent -- decoupled from the apply/maybe/skip thresholds used to derive
@@ -198,7 +205,9 @@ async def send_digest_and_cards(
     for row in scored_rows:
         verdict_counts[row["verdict"]] = verdict_counts.get(row["verdict"], 0) + 1
 
-    await bot.send_message(chat_id, format_digest(source_counts, verdict_counts))
+    await bot.send_message(
+        chat_id, format_digest(source_counts, verdict_counts, failed_sources)
+    )
 
     for row in scored_rows:
         if row["fit_score"] is not None and row["fit_score"] < fit_score_min:
