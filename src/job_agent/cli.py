@@ -21,6 +21,7 @@ from job_agent import (
     dedup,
     facts,
     prefilter,
+    release_assets,
     scoring,
     stats_report,
     telegram_bot,
@@ -661,6 +662,52 @@ def telegram_process(
     finally:
         conn.close()
     typer.echo(f"Processed {processed} update(s).")
+
+
+@app.command(name="db-pull")
+def db_pull(
+    repo: str = typer.Option(..., "--repo", help="owner/repo of the private data repo."),
+    tag: str = typer.Option("jobs-db", "--tag", help="Release tag jobs.db is stored under."),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+) -> None:
+    """Download the newest jobs.db release asset from --repo (see the
+    GitHub Actions deployment plan, amendment 4). Reads DATA_REPO_TOKEN
+    from the environment. Leaves --db untouched if no asset exists yet.
+    """
+    token = os.environ.get("DATA_REPO_TOKEN")
+    if not token:
+        typer.echo("DATA_REPO_TOKEN is not set.", err=True)
+        raise typer.Exit(code=1)
+
+    client = release_assets.make_client(token)
+    try:
+        found = release_assets.download_latest(client, repo, tag, Path(db_path))
+    finally:
+        client.close()
+    typer.echo(f"jobs.db {'downloaded' if found else 'not found yet -- starting fresh'}.")
+
+
+@app.command(name="db-push")
+def db_push(
+    repo: str = typer.Option(..., "--repo", help="owner/repo of the private data repo."),
+    tag: str = typer.Option("jobs-db", "--tag", help="Release tag jobs.db is stored under."),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+    keep: int = typer.Option(release_assets.KEEP_VERSIONS, "--keep"),
+) -> None:
+    """Upload --db as a new dated release asset on --repo, pruning to the
+    newest --keep versions. Reads DATA_REPO_TOKEN from the environment.
+    """
+    token = os.environ.get("DATA_REPO_TOKEN")
+    if not token:
+        typer.echo("DATA_REPO_TOKEN is not set.", err=True)
+        raise typer.Exit(code=1)
+
+    client = release_assets.make_client(token)
+    try:
+        name = release_assets.upload_and_rotate(client, repo, tag, Path(db_path), keep=keep)
+    finally:
+        client.close()
+    typer.echo(f"Uploaded {name} (keeping newest {keep}).")
 
 
 if __name__ == "__main__":

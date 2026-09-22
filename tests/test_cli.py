@@ -749,3 +749,59 @@ def test_read_write_offset_roundtrip(tmp_path):
 
     cli._write_offset(path, 42)
     assert cli._read_offset(path) == 42
+
+
+def test_db_pull_requires_token(monkeypatch, tmp_path):
+    monkeypatch.delenv("DATA_REPO_TOKEN", raising=False)
+    result = runner.invoke(cli.app, ["db-pull", "--repo", "owner/data-repo"])
+    assert result.exit_code == 1
+    assert "DATA_REPO_TOKEN" in result.output
+
+
+def test_db_pull_downloads_via_release_assets(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_REPO_TOKEN", "tok")
+    db_path = tmp_path / "jobs.db"
+
+    calls = []
+
+    def fake_download_latest(client, repo, tag, dest):
+        calls.append((repo, tag, dest))
+        return True
+
+    monkeypatch.setattr(cli.release_assets, "download_latest", fake_download_latest)
+
+    result = runner.invoke(
+        cli.app, ["db-pull", "--repo", "owner/data-repo", "--db", str(db_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("owner/data-repo", "jobs-db", db_path)]
+    assert "downloaded" in result.output
+
+
+def test_db_push_requires_token(monkeypatch, tmp_path):
+    monkeypatch.delenv("DATA_REPO_TOKEN", raising=False)
+    result = runner.invoke(cli.app, ["db-push", "--repo", "owner/data-repo"])
+    assert result.exit_code == 1
+    assert "DATA_REPO_TOKEN" in result.output
+
+
+def test_db_push_uploads_via_release_assets(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_REPO_TOKEN", "tok")
+    db_path = tmp_path / "jobs.db"
+
+    calls = []
+
+    def fake_upload_and_rotate(client, repo, tag, src, *, keep):
+        calls.append((repo, tag, src, keep))
+        return "jobs-20260101T000000Z.db"
+
+    monkeypatch.setattr(cli.release_assets, "upload_and_rotate", fake_upload_and_rotate)
+
+    result = runner.invoke(
+        cli.app, ["db-push", "--repo", "owner/data-repo", "--db", str(db_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("owner/data-repo", "jobs-db", db_path, 7)]
+    assert "jobs-20260101T000000Z.db" in result.output
