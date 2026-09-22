@@ -15,6 +15,9 @@ work_authorization:
   us: "requires_sponsorship"
   uk: "requires_sponsorship"
   ukraine: "authorized"
+  # Optional: country-code -> free-text status, for countries the
+  # eu/us/uk/ukraine buckets above don't cover.
+  per_country: {}
 
 relocation:
   willing: false
@@ -26,8 +29,29 @@ salary_expectation:
   currency: "USD"
   monthly_min: 2500
   monthly_max: 3500
+  monthly_target: 3000  # optional: one preferred figure within the range
 
 timezone: "UTC+2"
+
+# Everything below is optional -- fill in only what your target
+# applications actually ask about.
+work_format:
+  remote: true
+  hybrid: false
+  onsite: false
+  onsite_salary_floor: null
+
+availability:
+  night_shifts: false
+  weekends: false
+  shift_notes: null
+
+employment_types:
+  - "employment_contract"
+
+test_task:
+  willing: true
+  max_hours: null
 
 languages:
   - name: "English"
@@ -43,5 +67,6 @@ links:
 years_of_experience:
   qa_automation: 3
   manual_qa: 1
+  ai_automation: 0
   ml_ai: 0
   general: 3

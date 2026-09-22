@@ -156,6 +156,70 @@ def test_check_answers_missing_knockout_field(tmp_path):
     assert any(p.startswith("notice_period_days:") for p in result.problems)
 
 
+def test_check_answers_warns_on_missing_optional_knockout_fields(tmp_path):
+    dest = tmp_path / "answers.yaml"
+    dest.write_text(REAL_ANSWERS_YAML, encoding="utf-8")
+
+    result = data_guard.check_answers(dest)
+
+    assert result.ok is True  # missing optional fields never fail the check
+    warned_paths = {w.split(":")[0] for w in result.warnings}
+    assert warned_paths == {
+        "work_format",
+        "availability",
+        "employment_types",
+        "test_task",
+        "salary_expectation.monthly_target",
+        "work_authorization.per_country",
+    }
+
+
+def test_check_answers_no_warnings_when_optional_fields_filled(tmp_path):
+    dest = tmp_path / "answers.yaml"
+    dest.write_text(
+        REAL_ANSWERS_YAML
+        + """
+work_format:
+  remote: true
+  hybrid: false
+  onsite: false
+availability:
+  night_shifts: false
+  weekends: false
+employment_types:
+  - "employment_contract"
+test_task:
+  willing: true
+""",
+        encoding="utf-8",
+    )
+    # give the two nested optional fields a value too
+    text = dest.read_text(encoding="utf-8")
+    text = text.replace(
+        "  monthly_max: 4000\n", "  monthly_max: 4000\n  monthly_target: 3500\n"
+    )
+    text = text.replace(
+        '  ukraine: "authorized"\n', '  ukraine: "authorized"\n  per_country:\n    pl: "ok"\n'
+    )
+    dest.write_text(text, encoding="utf-8")
+
+    result = data_guard.check_answers(dest)
+
+    assert result.ok is True
+    assert result.warnings == []
+
+
+def test_format_check_report_includes_warnings(tmp_path):
+    dest = tmp_path / "answers.yaml"
+    dest.write_text(REAL_ANSWERS_YAML, encoding="utf-8")
+    result = data_guard.check_answers(dest)
+
+    text = data_guard.format_check_report([result])
+
+    assert f"{dest}: OK" in text
+    assert "! work_format: not set" in text
+
+
 def test_check_data_safety_runs_both(tmp_path):
     facts_path = tmp_path / "facts.yaml"
     answers_path = tmp_path / "answers.yaml"

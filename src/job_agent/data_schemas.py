@@ -85,6 +85,10 @@ class WorkAuthorization(BaseModel):
     us: str
     uk: str
     ukraine: str
+    # Country-code -> free-text status, for countries not covered by the
+    # eu/us/uk/ukraine buckets above (e.g. a residence-permit country with
+    # its own visa/status rules). Optional: most applications never ask.
+    per_country: dict[str, str] = Field(default_factory=dict)
 
 
 class Relocation(BaseModel):
@@ -96,11 +100,36 @@ class SalaryExpectation(BaseModel):
     currency: str
     monthly_min: int
     monthly_max: int
+    # A single preferred figure within [monthly_min, monthly_max], for forms
+    # that ask for one number instead of a range. Optional.
+    monthly_target: int | None = None
+
+
+class WorkFormat(BaseModel):
+    remote: bool = False
+    hybrid: bool = False
+    onsite: bool = False
+    # Minimum monthly figure (same currency as salary_expectation) at which
+    # an onsite/hybrid role becomes acceptable. Optional, only meaningful
+    # when onsite or hybrid is true.
+    onsite_salary_floor: int | None = None
+
+
+class Availability(BaseModel):
+    night_shifts: bool = False
+    weekends: bool = False
+    shift_notes: str | None = None
+
+
+class TestTask(BaseModel):
+    willing: bool | None = None
+    max_hours: float | None = None
 
 
 class YearsOfExperience(BaseModel):
     qa_automation: float | None = None
     manual_qa: float | None = None
+    ai_automation: float | None = None
     ml_ai: float | None = None
     general: float | None = None
 
@@ -115,3 +144,13 @@ class Answers(BaseModel):
     languages: list[Language] = Field(min_length=1)
     links: Links
     years_of_experience: YearsOfExperience = Field(default_factory=YearsOfExperience)
+    # Everything below is optional -- PROJECT.md §5.7's knockout-question
+    # answer bank only needs to cover what a form actually asks, and not
+    # every application asks about shift work, contract type, or a paid
+    # test task. Missing ones are reported as a data_guard warning (not a
+    # failure) so a first-time answers.yaml isn't blocked on filling in
+    # sections that may never come up.
+    work_format: WorkFormat | None = None
+    availability: Availability | None = None
+    employment_types: list[str] = Field(default_factory=list)
+    test_task: TestTask | None = None

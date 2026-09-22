@@ -55,3 +55,39 @@ def test_answers_schema_rejects_missing_work_authorization():
     except ValidationError as exc:
         locs = {".".join(str(p) for p in e["loc"]) for e in exc.errors()}
         assert "work_authorization" in locs
+
+
+def test_answers_schema_accepts_optional_extension_fields():
+    data = load_yaml("data.example/answers.example.yaml")
+    answers = Answers.model_validate(data)
+    assert answers.work_authorization.per_country == {}
+    assert answers.salary_expectation.monthly_target == 3000
+    assert answers.work_format.remote is True
+    assert answers.work_format.onsite_salary_floor is None
+    assert answers.availability.night_shifts is False
+    assert answers.employment_types == ["employment_contract"]
+    assert answers.test_task.willing is True
+    assert answers.years_of_experience.ai_automation == 0
+
+
+def test_answers_schema_optional_extension_fields_all_omittable():
+    data = load_yaml("data.example/answers.example.yaml")
+    for key in ("work_format", "availability", "employment_types", "test_task"):
+        del data[key]
+    del data["salary_expectation"]["monthly_target"]
+    del data["work_authorization"]["per_country"]
+
+    answers = Answers.model_validate(data)
+    assert answers.work_format is None
+    assert answers.availability is None
+    assert answers.employment_types == []
+    assert answers.test_task is None
+    assert answers.salary_expectation.monthly_target is None
+    assert answers.work_authorization.per_country == {}
+
+
+def test_answers_schema_accepts_per_country_work_authorization():
+    data = load_yaml("data.example/answers.example.yaml")
+    data["work_authorization"]["per_country"] = {"pl": "temporary_protection"}
+    answers = Answers.model_validate(data)
+    assert answers.work_authorization.per_country == {"pl": "temporary_protection"}

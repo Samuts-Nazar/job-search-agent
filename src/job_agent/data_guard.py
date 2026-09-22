@@ -45,12 +45,24 @@ ANSWERS_IDENTITY_PATHS: list[tuple[str, ...]] = [
     ("links", "portfolio"),
 ]
 
+# Optional knockout-question fields (data_schemas.Answers): missing ones
+# are a warning, not a failure -- see Answers' docstring-equivalent comment.
+ANSWERS_OPTIONAL_KNOCKOUT_PATHS: list[tuple[str, ...]] = [
+    ("work_format",),
+    ("availability",),
+    ("employment_types",),
+    ("test_task",),
+    ("salary_expectation", "monthly_target"),
+    ("work_authorization", "per_country"),
+]
+
 
 @dataclass
 class DataCheckResult:
     path: str
     ok: bool
     problems: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 def _load_yaml_or_none(path: Path | str) -> dict[str, Any] | None:
@@ -93,6 +105,20 @@ def _find_list_identity_leaks(
         if value and value in example_values:
             leaks.append(f"{list_key}[{index}].{item_field}")
     return leaks
+
+
+def _missing_optional_warnings(
+    data: dict[str, Any], paths: list[tuple[str, ...]]
+) -> list[str]:
+    warnings = []
+    for path in paths:
+        value = _get_nested(data, path)
+        if value is None or value == [] or value == {}:
+            warnings.append(
+                f"{'.'.join(path)}: not set -- some application forms ask this as a "
+                "knockout question"
+            )
+    return warnings
 
 
 def _validation_problems(data: dict[str, Any], schema: type) -> list[str]:
@@ -153,7 +179,9 @@ def check_answers(path: Path | str = ANSWERS_PATH) -> DataCheckResult:
     leaks = _find_identity_leaks(data, example_data, ANSWERS_IDENTITY_PATHS)
     problems += [f"{leak}: still has the example value" for leak in leaks]
 
-    return DataCheckResult(path=path, ok=not problems, problems=problems)
+    warnings = _missing_optional_warnings(data, ANSWERS_OPTIONAL_KNOCKOUT_PATHS)
+
+    return DataCheckResult(path=path, ok=not problems, problems=problems, warnings=warnings)
 
 
 def check_data_safety(
@@ -168,4 +196,6 @@ def format_check_report(results: list[DataCheckResult]) -> str:
         lines.append(f"{result.path}: {'OK' if result.ok else 'FAILED'}")
         for problem in result.problems:
             lines.append(f"  - {problem}")
+        for warning in result.warnings:
+            lines.append(f"  ! {warning}")
     return "\n".join(lines)
