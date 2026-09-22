@@ -707,3 +707,45 @@ def test_telegram_cleanup_command_reports_counts(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "Deleted 3 messages, 1 too old" in result.output
+
+
+def test_telegram_process_command_reports_count(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    db_path = tmp_path / "jobs.db"
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    async def fake_process(conn, secrets, config, *, offset_path, alert_flag_path, **kwargs):
+        assert offset_path == tmp_path / "offset.txt"
+        return 4
+
+    monkeypatch.setattr(cli, "_telegram_process", fake_process)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "telegram-process",
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--db",
+            str(db_path),
+            "--offset-file",
+            str(tmp_path / "offset.txt"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Processed 4 update(s)." in result.output
+
+
+def test_read_write_offset_roundtrip(tmp_path):
+    path = tmp_path / "offset.txt"
+    assert cli._read_offset(path) is None
+
+    cli._write_offset(path, 42)
+    assert cli._read_offset(path) == 42

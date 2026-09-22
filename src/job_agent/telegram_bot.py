@@ -245,3 +245,20 @@ def build_dispatcher(conn: sqlite3.Connection, min_score: int) -> Dispatcher:
     dispatcher = Dispatcher()
     dispatcher.include_router(build_router(conn, min_score))
     return dispatcher
+
+
+async def process_pending_updates(
+    bot: Bot, dispatcher: Dispatcher, *, offset: int | None
+) -> tuple[int, int | None]:
+    """Fetches whatever updates are waiting right now (non-blocking --
+    timeout=0) and feeds each into the dispatcher once via feed_update(),
+    the same handler logic `start_polling()` uses locally. Returns
+    (count_processed, new_offset) -- new_offset is the last update's id +
+    1, or None if there were no updates (caller should keep the previous
+    offset)."""
+    updates = await bot.get_updates(offset=offset, timeout=0)
+    for update in updates:
+        await dispatcher.feed_update(bot, update)
+    if not updates:
+        return 0, None
+    return len(updates), updates[-1].update_id + 1

@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 import typer
@@ -16,6 +17,7 @@ from job_agent import (
     ats_vendor,
     data_guard,
     db,
+    deadman,
     dedup,
     facts,
     prefilter,
@@ -38,6 +40,8 @@ app = typer.Typer(add_completion=False)
 DEFAULT_CONFIG_PATH = "config.yaml"
 DEFAULT_DB_PATH = "data/jobs.db"
 DEFAULT_ENV_PATH = ".env"
+DEFAULT_OFFSET_PATH = "data/telegram_offset.txt"
+DEFAULT_ALERT_FLAG_PATH = "data/telegram_stale_alert.flag"
 
 # Set by the GitHub Actions workflows (never locally): public-repo Actions
 # logs are world-readable, so under JOB_CI=1 an exception's own message --
@@ -221,6 +225,50 @@ async def _telegram_cleanup(
         return await telegram_bot.cleanup_old_cards(
             bot, secrets.telegram_chat_id, conn, below_score=below_score
         )
+    finally:
+        await bot.session.close()
+
+
+def _read_offset(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8").strip()
+    return int(text) if text else None
+
+
+def _write_offset(path: Path, offset: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(offset), encoding="utf-8")
+
+
+async def _telegram_process(
+    conn: sqlite3.Connection,
+    secrets: Secrets,
+    config: Config,
+    *,
+    offset_path: Path,
+    alert_flag_path: Path,
+    stale_threshold_hours: float,
+) -> int:
+    """One-shot: process whatever Telegram updates are waiting, persist the
+    new offset, then check the secondary stale-pipeline signal. Returns
+    the number of updates processed."""
+    bot = telegram_bot.build_bot(secrets.telegram_bot_token)
+    try:
+        dispatcher = telegram_bot.build_dispatcher(conn, config.telegram.min_score)
+        offset = _read_offset(offset_path)
+        processed, new_offset = await telegram_bot.process_pending_updates(
+            bot, dispatcher, offset=offset
+        )
+        if new_offset is not None:
+            _write_offset(offset_path, new_offset)
+
+        alert = deadman.check_pipeline_staleness(
+            conn, alert_flag_path=alert_flag_path, threshold_hours=stale_threshold_hours
+        )
+        if alert:
+            await bot.send_message(secrets.telegram_chat_id, alert)
+        return processed
     finally:
         await bot.session.close()
 
@@ -567,6 +615,52 @@ def telegram_cleanup(
     finally:
         conn.close()
     typer.echo(f"Deleted {deleted} messages, {too_old} too old to delete (>48h).")
+
+
+@app.command(name="telegram-process")
+def telegram_process(
+    config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+    offset_path: str = typer.Option(DEFAULT_OFFSET_PATH, "--offset-file"),
+    alert_flag_path: str = typer.Option(DEFAULT_ALERT_FLAG_PATH, "--alert-flag-file"),
+    stale_threshold_hours: float = typer.Option(
+        deadman.DEFAULT_STALE_THRESHOLD_HOURS, "--stale-threshold-hours"
+    ),
+) -> None:
+    """Process whatever Telegram updates are waiting right now, once, and
+    exit -- for a scheduled process (e.g. a GitHub Actions workflow run
+    every 15 min) instead of `job`'s local infinite start_polling() loop.
+    Same /pending, /stats, /mark, and button handlers either way; only the
+    update-delivery mechanism differs. Also runs the secondary (in-Actions)
+    stale-pipeline check -- see job_agent/deadman.py.
+    """
+    try:
+        config = load_config(config_path)
+        secrets = load_secrets(env_path)
+    except FileNotFoundError as exc:
+        _echo_error(exc)
+        raise typer.Exit(code=1) from exc
+    except ValidationError as exc:
+        _echo_error(exc, prefix=f"Missing or invalid secrets in {env_path}: ")
+        raise typer.Exit(code=1) from exc
+
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    try:
+        processed = asyncio.run(
+            _telegram_process(
+                conn,
+                secrets,
+                config,
+                offset_path=Path(offset_path),
+                alert_flag_path=Path(alert_flag_path),
+                stale_threshold_hours=stale_threshold_hours,
+            )
+        )
+    finally:
+        conn.close()
+    typer.echo(f"Processed {processed} update(s).")
 
 
 if __name__ == "__main__":

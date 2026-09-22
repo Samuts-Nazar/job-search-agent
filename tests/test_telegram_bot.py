@@ -250,3 +250,50 @@ async def test_cleanup_old_cards_does_not_retry_already_deleted(conn):
     assert deleted == 0
     assert too_old == 0
     assert bot.deleted == [101]
+
+
+@dataclass
+class _FakeUpdate:
+    update_id: int
+
+
+@dataclass
+class _UpdatesBot:
+    updates_to_return: list
+    requested_offsets: list = field(default_factory=list)
+
+    async def get_updates(self, offset=None, timeout=0, **kwargs):
+        self.requested_offsets.append(offset)
+        return self.updates_to_return
+
+
+@dataclass
+class _RecordingDispatcher:
+    fed: list = field(default_factory=list)
+
+    async def feed_update(self, bot, update, **kwargs):
+        self.fed.append(update)
+
+
+async def test_process_pending_updates_feeds_each_and_returns_new_offset():
+    updates = [_FakeUpdate(update_id=10), _FakeUpdate(update_id=11)]
+    bot = _UpdatesBot(updates_to_return=updates)
+    dispatcher = _RecordingDispatcher()
+
+    count, new_offset = await telegram_bot.process_pending_updates(bot, dispatcher, offset=5)
+
+    assert bot.requested_offsets == [5]
+    assert dispatcher.fed == updates
+    assert count == 2
+    assert new_offset == 12  # last update_id + 1
+
+
+async def test_process_pending_updates_returns_none_when_nothing_pending():
+    bot = _UpdatesBot(updates_to_return=[])
+    dispatcher = _RecordingDispatcher()
+
+    count, new_offset = await telegram_bot.process_pending_updates(bot, dispatcher, offset=5)
+
+    assert count == 0
+    assert new_offset is None
+    assert dispatcher.fed == []
