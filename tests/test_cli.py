@@ -261,6 +261,27 @@ def test_render_test_command_renders_and_checks(tmp_path):
     assert "ATS checks: OK" in result.stdout
 
 
+def test_render_test_refuses_to_render_invalid_content(monkeypatch, tmp_path):
+    from job_agent.cv import content as cv_content_module
+
+    real_build = cv_content_module.build_cv_content
+
+    def poisoned_build(facts_data, **kwargs):
+        content = real_build(facts_data, **kwargs)
+        content["skills"][0]["items"].append("Invented Skill Not In Facts")
+        return content
+
+    monkeypatch.setattr(cv_content_module, "build_cv_content", poisoned_build)
+
+    output_path = tmp_path / "cv.pdf"
+    result = runner.invoke(cli.app, ["render-test", "--output", str(output_path)])
+
+    assert result.exit_code == 1
+    assert "Content validation FAILED" in result.output
+    assert "Invented Skill Not In Facts" in result.output
+    assert not output_path.exists()
+
+
 def test_check_data_command_fails_on_missing_files(tmp_path):
     result = runner.invoke(
         cli.app,

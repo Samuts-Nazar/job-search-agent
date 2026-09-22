@@ -433,16 +433,24 @@ def render_test(
 ) -> None:
     """Render the CV template against data.example content and check the output.
 
-    Runs the ATS text-layer checks on every render, plus the OpenResume
-    parser (report only) since this checks the template itself.
+    Runs the content validation (PROJECT.md §8.5) and ATS text-layer
+    checks on every render, plus the OpenResume parser (report only)
+    since this checks the template itself.
     """
     from job_agent.cv.ats_checks import check_ats
-    from job_agent.cv.content import build_cv_content
+    from job_agent.cv.content import build_cv_content, validate_cv_content
     from job_agent.cv.openresume_check import OpenResumeCheckError, run_openresume_parser
     from job_agent.cv.render import RenderError, render_cv
 
     facts_data = facts.load_facts("data.example/facts.example.yaml")
     content = build_cv_content(facts_data, track_id=track)
+
+    content_problems = validate_cv_content(content, facts_data)
+    if content_problems:
+        typer.echo("Content validation FAILED -- refusing to render:", err=True)
+        for problem in content_problems:
+            typer.echo(f"  - {problem}", err=True)
+        raise typer.Exit(code=1)
 
     try:
         pdf_path = render_cv(content, output_path)
