@@ -1,0 +1,80 @@
+name: telegram-poll
+
+# Processes whatever Telegram updates are waiting (/pending, /stats,
+# /mark, button presses, /run) every 15 minutes -- Telegram keeps updates
+# for 24h, so nothing is lost between runs. See docs/deployment.md.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}
+
+# Shared with pipeline.yml: both read-modify-write the same private repo
+# and the same jobs.db release asset.
+concurrency:
+  group: data-repo-writer
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # actions:write is needed to dispatch pipeline.yml in response to a
+  # /run command (see cli.py's _trigger_pipeline_workflow).
+  actions: write
+
+env:
+  JOB_CI: "1"
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Checkout private data repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.DATA_REPO }}
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data-repo
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Download jobs.db
+        env:
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
+        run: |
+          uv run job db-pull --repo "${{ secrets.DATA_REPO }}" --db data-repo/data/jobs.db
+
+      - name: Process pending Telegram updates
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run job telegram-process \
+            --config data-repo/config.yaml \
+            --db data-repo/data/jobs.db \
+            --offset-file data-repo/data/telegram_offset.txt \
+            --alert-flag-file data-repo/data/telegram_stale_alert.flag
+
+      - name: Upload jobs.db
+        if: always()
+        env:
+          DATA_REPO_TOKEN: ${{ secrets.DATA_REPO_TOKEN }}
+        run: |
+          uv run job db-push --repo "${{ secrets.DATA_REPO }}" --db data-repo/data/jobs.db
+
+      - name: Push offset + alert flag
+        if: always()
+        run: |
+          git config -C data-repo user.name "job-search-agent bot"
+          git config -C data-repo user.email "actions@users.noreply.github.com"
+          scripts/safe_push.sh data-repo "telegram-poll $(date -u +%FT%TZ)"
