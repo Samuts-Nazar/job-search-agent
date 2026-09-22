@@ -242,6 +242,32 @@ def _write_offset(path: Path, offset: int) -> None:
     path.write_text(str(offset), encoding="utf-8")
 
 
+async def _trigger_pipeline_workflow() -> None:
+    """Dispatches pipeline.yml's workflow_dispatch event via the GitHub
+    API, in response to a /run command -- see telegram_bot.build_router's
+    on_run. Only meaningful inside the GitHub Actions deployment: GITHUB_
+    TOKEN and GITHUB_REPOSITORY are provided automatically there, so this
+    is a silent no-op when running `job` locally."""
+    token = os.environ.get("GITHUB_TOKEN")
+    repo = os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repo:
+        return
+    async with httpx.AsyncClient(
+        base_url="https://api.github.com",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        timeout=30.0,
+    ) as client:
+        response = await client.post(
+            f"/repos/{repo}/actions/workflows/pipeline.yml/dispatches",
+            json={"ref": os.environ.get("GITHUB_REF_NAME", "main")},
+        )
+        response.raise_for_status()
+
+
 async def _telegram_process(
     conn: sqlite3.Connection,
     secrets: Secrets,
@@ -256,7 +282,9 @@ async def _telegram_process(
     the number of updates processed."""
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
     try:
-        dispatcher = telegram_bot.build_dispatcher(conn, config.telegram.min_score)
+        dispatcher = telegram_bot.build_dispatcher(
+            conn, config.telegram.min_score, on_run=_trigger_pipeline_workflow
+        )
         offset = _read_offset(offset_path)
         processed, new_offset = await telegram_bot.process_pending_updates(
             bot, dispatcher, offset=offset

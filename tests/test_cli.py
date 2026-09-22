@@ -805,3 +805,50 @@ def test_db_push_uploads_via_release_assets(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert calls == [("owner/data-repo", "jobs-db", db_path, 7)]
     assert "jobs-20260101T000000Z.db" in result.output
+
+
+async def test_trigger_pipeline_workflow_noop_without_github_env(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("should not make any request without GITHUB_TOKEN/REPOSITORY")
+
+    monkeypatch.setattr(cli.httpx, "AsyncClient", fail_if_called)
+
+    await cli._trigger_pipeline_workflow()  # must not raise
+
+
+async def test_trigger_pipeline_workflow_calls_dispatch_api(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/job-search-agent")
+    monkeypatch.setenv("GITHUB_REF_NAME", "main")
+
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc_info):
+            return False
+
+        async def post(self, url, json=None):
+            calls.append((url, json))
+            return FakeResponse()
+
+    monkeypatch.setattr(cli.httpx, "AsyncClient", FakeAsyncClient)
+
+    await cli._trigger_pipeline_workflow()
+
+    assert len(calls) == 1
+    url, payload = calls[0]
+    assert url == "/repos/owner/job-search-agent/actions/workflows/pipeline.yml/dispatches"
+    assert payload == {"ref": "main"}

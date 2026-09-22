@@ -136,6 +136,47 @@ def test_mark_posting_updates_status(conn):
     assert row["status"] == "interview"
 
 
+def _get_handler(router, name):
+    for handler in router.message.handlers:
+        if handler.callback.__name__ == name:
+            return handler.callback
+    raise AssertionError(f"no handler named {name!r}")
+
+
+@dataclass
+class _FakeMessage:
+    answered: list = field(default_factory=list)
+
+    async def answer(self, text, reply_markup=None):
+        self.answered.append(text)
+
+
+async def test_run_command_calls_on_run_and_acks(conn):
+    calls = []
+
+    async def on_run():
+        calls.append(1)
+
+    router = telegram_bot.build_router(conn, 40, on_run=on_run)
+    handle_run = _get_handler(router, "handle_run")
+    message = _FakeMessage()
+
+    await handle_run(message)
+
+    assert calls == [1]
+    assert message.answered == ["Triggering a pipeline run."]
+
+
+async def test_run_command_without_on_run_just_acks(conn):
+    router = telegram_bot.build_router(conn, 40)
+    handle_run = _get_handler(router, "handle_run")
+    message = _FakeMessage()
+
+    await handle_run(message)  # must not raise with on_run=None
+
+    assert message.answered == ["Triggering a pipeline run."]
+
+
 def test_skip_posting_updates_status(conn):
     posting_id = insert_scored_posting(conn)
     telegram_bot.skip_posting(conn, posting_id)

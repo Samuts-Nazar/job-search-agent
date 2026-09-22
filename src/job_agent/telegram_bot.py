@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Awaitable, Callable
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -145,8 +146,22 @@ def get_pending_rows(conn: sqlite3.Connection, min_score: int) -> list[sqlite3.R
     ]
 
 
-def build_router(conn: sqlite3.Connection, min_score: int) -> Router:
+def build_router(
+    conn: sqlite3.Connection,
+    min_score: int,
+    *,
+    on_run: Callable[[], Awaitable[None]] | None = None,
+) -> Router:
     router = Router()
+
+    @router.message(Command("run"))
+    async def handle_run(message: Message) -> None:
+        """`on_run` is how the GitHub Actions deployment wires /run to
+        trigger pipeline.yml's workflow_dispatch (see cli.py's
+        _telegram_process) -- locally (on_run=None) this just acks."""
+        if on_run is not None:
+            await on_run()
+        await message.answer("Triggering a pipeline run.")
 
     @router.message(Command("pending"))
     async def handle_pending(message: Message) -> None:
@@ -241,9 +256,14 @@ def build_bot(token: str) -> Bot:
     return Bot(token=token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
-def build_dispatcher(conn: sqlite3.Connection, min_score: int) -> Dispatcher:
+def build_dispatcher(
+    conn: sqlite3.Connection,
+    min_score: int,
+    *,
+    on_run: Callable[[], Awaitable[None]] | None = None,
+) -> Dispatcher:
     dispatcher = Dispatcher()
-    dispatcher.include_router(build_router(conn, min_score))
+    dispatcher.include_router(build_router(conn, min_score, on_run=on_run))
     return dispatcher
 
 
