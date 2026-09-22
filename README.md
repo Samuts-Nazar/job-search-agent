@@ -125,6 +125,81 @@ Model IDs are read entirely from `config.yaml` (`models.bulk`, `models.quality`,
 the source. Run `uv run job eval` after switching to confirm the new model's
 JSON-schema validity rate, latency, and cost are acceptable.
 
+## Deploying on GitHub Actions (run from your phone)
+
+`job` also runs unattended on GitHub Actions, with Telegram as the only
+interface -- no server of your own needed. Two repos are involved: this
+public code repo (workflows + code, no personal data ever) and a private
+data repo you create yourself (config, facts, answers, `jobs.db`).
+Multiple people can run their own copy by forking this repo and pointing
+it at their own private data repo -- nothing owner-specific is hardcoded
+anywhere in the workflows or code.
+
+Setup for your own fork:
+
+1. **Create a private data repo.** Any name, e.g. `job-search-data`.
+   Copy `config.example.yaml` to `config.yaml` and `data.example/*` to
+   `data/*` in it, then edit them with your real values (same files you'd
+   use locally -- see [Setup](#setup) above). Commit and push.
+2. **Generate a fine-grained PAT** scoped to just that private repo, with
+   `contents: read and write` permission (this also covers uploading/
+   downloading the `jobs.db` release asset -- see below).
+3. **Set these secrets** on your fork of this repo (Settings -> Secrets
+   and variables -> Actions):
+
+   | Secret | Value |
+   |---|---|
+   | `OPENROUTER_API_KEY` | same as your local `.env` |
+   | `TELEGRAM_BOT_TOKEN` | same as your local `.env` |
+   | `TELEGRAM_CHAT_ID` | same as your local `.env` |
+   | `DATA_REPO` | `your-username/job-search-data` |
+   | `DATA_REPO_TOKEN` | the PAT from step 2 |
+   | `HEALTHCHECK_URL` | optional -- see below |
+
+4. **Confirm Actions is enabled** on your fork (forks sometimes have it
+   off by default).
+5. Adjust the cron schedule in `.github/workflows/pipeline.yml` if you
+   want a different time than the default daily run.
+
+What each workflow does:
+
+- **`pipeline.yml`** -- daily (or `/run` from Telegram, or manual
+  dispatch): collects, scores, sends the Telegram digest, then exits
+  (`--no-poll`) rather than blocking like local `job` does.
+- **`telegram-poll.yml`** -- every 15 minutes: processes whatever
+  Telegram commands/button presses came in since last time
+  (`/pending`, `/stats`, `/mark`, `/run`). Telegram keeps updates for
+  24h, so a 15-minute gap never loses one.
+- **`keepalive.yml`** -- monthly no-op commit to *this* repo. GitHub
+  auto-disables a public repo's scheduled triggers after 60 days with no
+  commits to that repo, and every real commit this deployment makes goes
+  to your *private* data repo instead -- this is just what keeps the
+  schedule alive.
+
+**`jobs.db` is not committed to git** -- a constantly-changing SQLite
+file would make your private repo's history grow without bound. It's
+stored as a rotating GitHub Release asset on the private repo instead
+(`job db-pull`/`job db-push`, keeping the newest 7 versions); everything
+else (config, facts, answers, the Telegram update offset) is small text
+committed normally.
+
+**Dead-man's switch (optional but recommended):** set `HEALTHCHECK_URL`
+to a check URL from a free heartbeat service (e.g.
+[healthchecks.io](https://healthchecks.io)) with its Telegram integration
+enabled and a 36h grace period. `pipeline.yml` pings it on every
+successful run; the service alerts you if a ping doesn't arrive in time
+-- this works even if GitHub Actions itself is down or your workflows got
+disabled, which an in-repo check alone couldn't detect. `job
+telegram-process` also runs its own secondary check reading `jobs.db`
+directly, as a backup signal for "Actions is fine but the pipeline itself
+keeps failing."
+
+**Public-repo logs are world-readable.** Both scheduled workflows set
+`JOB_CI=1`, which makes `job` print only counts, source names, error
+types, and timings -- never posting text, fact values, or full exception
+messages. No `actions/upload-artifact` step runs in either workflow
+either, so nothing from a run is attached as a downloadable artifact.
+
 ## Development
 
 ```
