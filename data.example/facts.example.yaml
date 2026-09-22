@@ -37,14 +37,19 @@ cv_tracks:
 skills:
   - name: "Python"
     tracks: [qa_automation, ai_automation, ml_ai]
+    category: "Programming & Tools"
   - name: "Playwright"
     tracks: [qa_automation]
+    category: "QA & Testing"
   - name: "pytest"
     tracks: [qa_automation, ai_automation]
+    category: "QA & Testing"
   - name: "Manual testing"
     tracks: [manual_qa]
+    category: "QA & Testing"
   - name: "SQL"
     tracks: [qa_automation, manual_qa, ai_automation, ml_ai]
+    category: "Databases"
 
 projects:
   - id: example_project_1

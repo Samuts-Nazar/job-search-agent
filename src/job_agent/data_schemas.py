@@ -37,6 +37,10 @@ class CvTrack(BaseModel):
 class Skill(BaseModel):
     name: str
     tracks: list[str] = Field(default_factory=list)
+    # Groups skills in the CV's Technical Skills section (PROJECT.md
+    # §8.2) -- required so every skill is intentionally placed, not
+    # silently uncategorized.
+    category: str
 
 
 class Project(BaseModel):

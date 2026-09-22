@@ -28,6 +28,23 @@ def test_facts_schema_rejects_missing_required_field():
         assert "candidate.email" in locs
 
 
+def test_facts_schema_requires_skill_category():
+    data = load_yaml("data.example/facts.example.yaml")
+    del data["skills"][0]["category"]
+    try:
+        Facts.model_validate(data)
+        raise AssertionError("expected ValidationError")
+    except ValidationError as exc:
+        locs = {".".join(str(p) for p in e["loc"]) for e in exc.errors()}
+        assert "skills.0.category" in locs
+
+
+def test_facts_schema_accepts_skill_category():
+    data = load_yaml("data.example/facts.example.yaml")
+    facts = Facts.model_validate(data)
+    assert facts.skills[0].category == "Programming & Tools"
+
+
 def test_facts_schema_rejects_empty_cv_tracks():
     data = load_yaml("data.example/facts.example.yaml")
     data["cv_tracks"] = []
