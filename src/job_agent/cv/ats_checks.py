@@ -13,12 +13,10 @@ from typing import Any
 from pypdf import PdfReader
 
 EXPECTED_SECTIONS = [
-    "Summary",
     "Technical Skills",
     "Projects",
     "Experience",
     "Education",
-    "Languages",
 ]
 
 # U+FFFD is pypdf's/PDF's standard stand-in for a codepoint that had no

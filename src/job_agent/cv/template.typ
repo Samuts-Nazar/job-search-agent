@@ -37,13 +37,16 @@
   #if data.contact.github != "" [ #sym.dot #link(data.contact.github)[GitHub] ]
 ]
 
-#v(0.5em)
+#v(0.3em)
 
-= Summary
-#data.summary
+#align(center)[#text(weight: "medium")[#data.headline]]
+
+#v(0.3em)
 
 = Technical Skills
-#data.skills.join(", ")
+#for group in data.skills [
+  *#group.category:* #group.items.join(", ") \
+]
 
 = Projects
 #for p in data.projects [
@@ -63,9 +66,4 @@
 = Education
 #for ed in data.education [
   *#ed.institution* --- #ed.degree #h(1fr) #ed.dates \
-]
-
-= Languages
-#for l in data.languages [
-  #l.name: #l.cefr #h(1.5em)
 ]

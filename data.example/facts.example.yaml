@@ -21,18 +21,26 @@ candidate:
     github: "https://github.com/jane-example"
 
 # Track taxonomy fixed 2026-09-22 (PROJECT.md §8.3): manual_qa, qa_automation,
-# ai_automation, ml_ai. Each track has a fixed project selection/order -- see
-# PROJECT.md §8.3 -- not encoded here since that's Phase 2 rendering logic,
-# not registry data.
+# ai_automation, ml_ai. project_order is this track's fixed CV project
+# selection/order (§8.3), as project ids below -- lives here (not hardcoded
+# in cv/content.py) so each fork's own facts.yaml can define its own.
+# growth_projects are appended only when the posting mentions automation or
+# growth into it (§8.3's manual_qa rule; generic to any track, not just that
+# one).
 cv_tracks:
   - id: qa_automation
     title: "QA Automation Engineer"
+    project_order: [example_project_1]
   - id: manual_qa
     title: "Manual QA Engineer"
+    project_order: []
+    growth_projects: [example_project_1]
   - id: ai_automation
     title: "AI Automation Engineer"
+    project_order: [example_project_1]
   - id: ml_ai
     title: "ML/AI Engineer"
+    project_order: []
 
 skills:
   - name: "Python"

@@ -32,6 +32,15 @@ class Candidate(BaseModel):
 class CvTrack(BaseModel):
     id: str
     title: str
+    # Fixed project selection and order for this track's CV section
+    # (PROJECT.md §8.3), as facts.yaml project `id`s -- kept here rather
+    # than hardcoded in cv/content.py so each fork's own facts.yaml can
+    # define its own tracks/projects without touching code.
+    project_order: list[str] = Field(default_factory=list)
+    # Project ids appended to project_order, but only when the posting
+    # mentions automation or growth into it (PROJECT.md §8.3's manual_qa
+    # rule) -- generic so any track can opt in, not hardcoded to one.
+    growth_projects: list[str] = Field(default_factory=list)
 
 
 class Skill(BaseModel):

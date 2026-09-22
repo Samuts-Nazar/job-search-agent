@@ -2,18 +2,18 @@ from job_agent.cv import ats_checks
 
 
 def test_check_section_order_all_present_in_order():
-    text = "Summary\nfoo\nTechnical Skills\nbar\nProjects\nExperience\nEducation\nLanguages"
+    text = "Technical Skills\nbar\nProjects\nExperience\nEducation"
     assert ats_checks._check_section_order(text) == []
 
 
 def test_check_section_order_missing_section():
-    text = "Summary\nTechnical Skills\nProjects\nExperience\nEducation"
+    text = "Technical Skills\nProjects\nExperience"
     problems = ats_checks._check_section_order(text)
-    assert any("Languages" in p for p in problems)
+    assert any("Education" in p for p in problems)
 
 
 def test_check_section_order_out_of_order():
-    text = "Technical Skills\nSummary\nProjects\nExperience\nEducation\nLanguages"
+    text = "Projects\nTechnical Skills\nExperience\nEducation"
     problems = ats_checks._check_section_order(text)
     assert any("out of order" in p for p in problems)
 
