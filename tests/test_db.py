@@ -675,3 +675,50 @@ def test_funnel_reply_rate_by_source(conn):
 
     assert rates["dou"] == (0, 1)
     assert rates["djinni"] == (1, 1)
+
+
+# --- schema_diff -------------------------------------------------------
+
+
+def test_schema_diff_empty_for_a_freshly_initialized_db(conn):
+    assert db.schema_diff(conn) == {}
+
+
+def test_schema_diff_detects_a_missing_column(tmp_path):
+    connection = db.connect(tmp_path / "stale.db")
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS postings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            url TEXT NOT NULL,
+            canonical_url TEXT NOT NULL UNIQUE,
+            dedup_hash TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'new',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    connection.commit()
+
+    diffs = db.schema_diff(connection)
+
+    assert "postings" in diffs
+    missing, _extra = diffs["postings"]
+    assert "tech_tags" in missing  # a real column SCHEMA defines that this stale table lacks
+    connection.close()
+
+
+def test_schema_diff_reports_extra_columns_separately_from_missing(tmp_path):
+    connection = db.connect(tmp_path / "extra.db")
+    db.init_db(connection)
+    connection.execute("ALTER TABLE postings ADD COLUMN legacy_field TEXT")
+    connection.commit()
+
+    diffs = db.schema_diff(connection)
+
+    assert diffs["postings"] == (set(), {"legacy_field"})
+    connection.close()

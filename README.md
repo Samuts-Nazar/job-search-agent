@@ -60,6 +60,9 @@ uv run job --no-telegram      # same run, but sends and polls nothing (collect +
 uv run job eval         # compare models in config.yaml -> models.eval_candidates
 uv run job stats        # print pipeline/spend stats + extended aggregates (skills, reply rate, salary, ...)
 uv run job check-data   # validate data/facts.yaml and data/answers.yaml (also run before every `job`)
+uv run job doctor       # read-only check of everything a real run needs (data files, config/secrets,
+                         # OpenRouter key + credit balance, Telegram bot + chat id, typst/node,
+                         # every enabled source, DB schema) -- run this first when something looks broken
 uv run job render-test  # render the CV template against data.example content, run ATS + OpenResume checks
 uv run job export       # dump postings/scores/applications to CSV in output/export/ for outside analysis
 uv run job analyze --rescore  # re-score every stored posting with the current model/prompt

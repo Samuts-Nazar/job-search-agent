@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import sqlite3
 import statistics
 from collections import Counter
@@ -264,6 +265,42 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
     conn.commit()
+
+
+_SCHEMA_TABLE_RE = re.compile(r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\);", re.S)
+
+
+def _expected_schema_columns() -> dict[str, set[str]]:
+    tables: dict[str, set[str]] = {}
+    for name, body in _SCHEMA_TABLE_RE.findall(SCHEMA):
+        columns = set()
+        for line in body.strip().split("\n"):
+            line = line.strip().rstrip(",")
+            if not line or line.upper().startswith(
+                ("PRIMARY KEY", "FOREIGN KEY", "UNIQUE", "CHECK")
+            ):
+                continue
+            columns.add(line.split()[0])
+        tables[name] = columns
+    return tables
+
+
+def schema_diff(conn: sqlite3.Connection) -> dict[str, tuple[set[str], set[str]]]:
+    """{table: (missing_columns, extra_columns)} for every table this
+    module's SCHEMA defines, only including tables with a real diff.
+    `CREATE TABLE IF NOT EXISTS` never adds columns to an already-existing
+    table, so this is how a DB created before a schema change (a new
+    column added to SCHEMA) is actually detected -- used by `job doctor`.
+    Extra columns are harmless (e.g. old data kept around after a column
+    was dropped from SCHEMA, which hasn't happened yet but is handled)."""
+    diffs = {}
+    for table, expected in _expected_schema_columns().items():
+        actual = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        missing = expected - actual
+        extra = actual - expected
+        if missing or extra:
+            diffs[table] = (missing, extra)
+    return diffs
 
 
 @dataclass

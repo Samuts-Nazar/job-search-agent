@@ -26,6 +26,7 @@ from job_agent import (
     stats_report,
     telegram_bot,
 )
+from job_agent import doctor as doctor_module
 from job_agent import export as export_module
 from job_agent.config import Config, Secrets, SourcesConfig, load_config, load_secrets
 from job_agent.db import Posting
@@ -453,6 +454,60 @@ def check_data(
     results = data_guard.check_data_safety(facts_path, answers_path)
     typer.echo(data_guard.format_check_report(results))
     if not all(result.ok for result in results):
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def doctor(
+    config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+    facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
+    answers_path: str = typer.Option(data_guard.ANSWERS_PATH, "--answers"),
+) -> None:
+    """Checks everything a real run needs and reports pass/fail per item:
+    data files, config.yaml/.env load, OpenRouter key + credit balance,
+    Telegram bot + chat id, typst/node on PATH, every enabled source
+    reachable (one request each), and DB schema currency. Entirely
+    read-only -- run this first whenever something looks broken, before
+    digging into a specific command's error."""
+    checks: list[doctor_module.DoctorCheck] = []
+    checks += doctor_module.check_data_files(facts_path, answers_path)
+    checks += doctor_module.check_binaries()
+
+    try:
+        config = load_config(config_path)
+        checks.append(doctor_module.DoctorCheck(name="config.yaml", ok=True, detail=config_path))
+    except FileNotFoundError as exc:
+        checks.append(doctor_module.DoctorCheck(name="config.yaml", ok=False, detail=str(exc)))
+        config = None
+
+    try:
+        secrets = load_secrets(env_path)
+        checks.append(doctor_module.DoctorCheck(name="secrets (.env)", ok=True, detail=env_path))
+    except (FileNotFoundError, ValidationError) as exc:
+        checks.append(doctor_module.DoctorCheck(name="secrets (.env)", ok=False, detail=str(exc)))
+        secrets = None
+
+    if secrets is not None:
+        checks.append(doctor_module.check_openrouter(secrets.openrouter_api_key))
+        checks.append(
+            asyncio.run(
+                doctor_module.check_telegram(secrets.telegram_bot_token, secrets.telegram_chat_id)
+            )
+        )
+
+    if config is not None:
+        checks += doctor_module.check_sources(config.sources)
+
+    conn = db.connect(db_path)
+    try:
+        checks.append(doctor_module.check_db_schema(conn))
+    finally:
+        conn.close()
+
+    typer.echo(doctor_module.format_doctor_report(checks))
+    if not all(check.ok for check in checks):
         raise typer.Exit(code=1)
 
 

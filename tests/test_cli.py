@@ -930,3 +930,64 @@ async def test_trigger_pipeline_workflow_calls_dispatch_api(monkeypatch):
     url, payload = calls[0]
     assert url == "/repos/owner/job-search-agent/actions/workflows/pipeline.yml/dispatches"
     assert payload == {"ref": "main"}
+
+
+def test_doctor_command_reports_missing_config_and_secrets(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.doctor_module, "check_data_files", lambda *a, **k: [])
+    monkeypatch.setattr(cli.doctor_module, "check_binaries", lambda: [])
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "doctor",
+            "--config",
+            str(tmp_path / "missing-config.yaml"),
+            "--env",
+            str(tmp_path / "missing.env"),
+            "--db",
+            str(tmp_path / "jobs.db"),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "[FAILED] config.yaml" in result.output
+    assert "[FAILED] secrets (.env)" in result.output
+
+
+def test_doctor_command_passes_when_every_check_is_ok(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    def ok(name):
+        return cli.doctor_module.DoctorCheck(name=name, ok=True, detail="fine")
+
+    monkeypatch.setattr(cli.doctor_module, "check_data_files", lambda *a, **k: [ok("data")])
+    monkeypatch.setattr(cli.doctor_module, "check_binaries", lambda: [ok("binary")])
+    monkeypatch.setattr(cli.doctor_module, "check_openrouter", lambda api_key: ok("openrouter"))
+
+    async def fake_check_telegram(token, chat_id):
+        return ok("telegram")
+
+    monkeypatch.setattr(cli.doctor_module, "check_telegram", fake_check_telegram)
+    monkeypatch.setattr(cli.doctor_module, "check_sources", lambda config: [ok("sources")])
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "doctor",
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--db",
+            str(tmp_path / "jobs.db"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "checks passed" in result.output
+    assert "[FAILED]" not in result.output
