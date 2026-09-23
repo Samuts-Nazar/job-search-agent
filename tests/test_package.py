@@ -1,5 +1,6 @@
 import re
 import shutil
+from pathlib import Path
 
 import pytest
 import yaml
@@ -126,3 +127,58 @@ def test_build_package_end_to_end(tmp_path):
     assert pkg.ats_result.ok, pkg.ats_result.problems
     assert "Acme+Corp" in pkg.outreach_url
     assert "QA Automation Lead" in pkg.outreach_message
+    assert pkg.apply_policy == "automated"
+    assert pkg.apply_url == ""
+    assert pkg.checklist == []
+
+
+def test_build_package_manual_policy_attaches_source_checklist(tmp_path, monkeypatch):
+    monkeypatch.setattr(package, "render_cv", lambda content, path: Path(path))
+    monkeypatch.setattr(
+        package,
+        "check_ats",
+        lambda pdf_path, content: package.AtsCheckResult(ok=True, extracted_text=""),
+    )
+    monkeypatch.setattr(package, "validate_pdf_tokens", lambda text, facts, posting_title="": [])
+
+    pkg = package.build_package(
+        FACTS,
+        track_id="qa_automation",
+        posting_title="QA Engineer",
+        company="Uptowin",
+        description="manual testing",
+        posting_tech_tags=None,
+        output_path=tmp_path / "cv.pdf",
+        source="dou",
+        apply_policy="manual",
+        apply_url="https://jobs.dou.ua/companies/uptowin/vacancies/1/",
+    )
+
+    assert pkg.apply_policy == "manual"
+    assert pkg.apply_url == "https://jobs.dou.ua/companies/uptowin/vacancies/1/"
+    assert pkg.checklist == package.MANUAL_APPLY_CHECKLISTS["dou"]
+
+
+def test_build_package_manual_policy_unknown_source_uses_default_checklist(tmp_path, monkeypatch):
+    monkeypatch.setattr(package, "render_cv", lambda content, path: Path(path))
+    monkeypatch.setattr(
+        package,
+        "check_ats",
+        lambda pdf_path, content: package.AtsCheckResult(ok=True, extracted_text=""),
+    )
+    monkeypatch.setattr(package, "validate_pdf_tokens", lambda text, facts, posting_title="": [])
+
+    pkg = package.build_package(
+        FACTS,
+        track_id="qa_automation",
+        posting_title="QA Engineer",
+        company="Acme",
+        description="manual testing",
+        posting_tech_tags=None,
+        output_path=tmp_path / "cv.pdf",
+        source="some_new_source",
+        apply_policy="manual",
+        apply_url="https://example.com/apply/1",
+    )
+
+    assert pkg.checklist == package.DEFAULT_MANUAL_APPLY_CHECKLIST

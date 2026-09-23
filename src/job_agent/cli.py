@@ -27,7 +27,7 @@ from job_agent import (
     telegram_bot,
 )
 from job_agent import export as export_module
-from job_agent.config import Config, Secrets, load_config, load_secrets
+from job_agent.config import Config, Secrets, SourcesConfig, load_config, load_secrets
 from job_agent.db import Posting
 from job_agent.llm.client import make_client
 from job_agent.sources.djinni import collect_djinni
@@ -216,10 +216,15 @@ async def _poll(
     *,
     facts_data: dict | None = None,
     output_dir: Path = telegram_bot.DEFAULT_PACKAGE_OUTPUT_DIR,
+    sources_config: SourcesConfig | None = None,
 ) -> None:
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
     dispatcher = telegram_bot.build_dispatcher(
-        conn, min_score, facts_data=facts_data, output_dir=output_dir
+        conn,
+        min_score,
+        facts_data=facts_data,
+        output_dir=output_dir,
+        sources_config=sources_config,
     )
     try:
         await dispatcher.start_polling(bot)
@@ -299,6 +304,7 @@ async def _telegram_process(
             on_run=_trigger_pipeline_workflow,
             facts_data=facts_data,
             output_dir=output_dir,
+            sources_config=config.sources,
         )
         offset = _read_offset(offset_path)
         processed, new_offset = await telegram_bot.process_pending_updates(
@@ -385,7 +391,13 @@ def main(
                 )
                 facts_data = facts.load_facts(facts_path)
                 asyncio.run(
-                    _poll(conn, secrets, config.telegram.min_score, facts_data=facts_data)
+                    _poll(
+                        conn,
+                        secrets,
+                        config.telegram.min_score,
+                        facts_data=facts_data,
+                        sources_config=config.sources,
+                    )
                 )
     except KeyboardInterrupt:
         typer.echo("Shutting down.")

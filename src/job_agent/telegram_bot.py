@@ -33,6 +33,7 @@ from aiogram.types import (
 )
 
 from job_agent import db, package
+from job_agent.config import SourcesConfig
 
 MANUAL_STATUSES = {"replied", "rejected", "interview"}
 DEFAULT_PACKAGE_OUTPUT_DIR = Path("output/packages")
@@ -44,7 +45,7 @@ class PostingAction(CallbackData, prefix="posting"):
 
 
 class PackageAction(CallbackData, prefix="package"):
-    action: str  # "approve" | "regenerate" | "skip"
+    action: str  # "approve" | "regenerate" | "skip" | "mark_submitted"
     posting_id: int
 
 
@@ -161,14 +162,27 @@ def get_pending_rows(conn: sqlite3.Connection, min_score: int) -> list[sqlite3.R
     ]
 
 
-def _package_keyboard(posting_id: int) -> InlineKeyboardMarkup:
+def _package_keyboard(posting_id: int, apply_policy: str = "automated") -> InlineKeyboardMarkup:
+    """PROJECT.md §5.7: a manual-apply-policy package has no "form-filling"
+    step to approve, so its first button is "Mark as submitted" (once the
+    owner has actually pasted the message/attached the CV on the source
+    site) instead of "Approve" -- this is what feeds job stats's
+    application funnel with real data."""
+    first_button = (
+        InlineKeyboardButton(
+            text="Mark as submitted",
+            callback_data=PackageAction(action="mark_submitted", posting_id=posting_id).pack(),
+        )
+        if apply_policy == "manual"
+        else InlineKeyboardButton(
+            text="Approve",
+            callback_data=PackageAction(action="approve", posting_id=posting_id).pack(),
+        )
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="Approve",
-                    callback_data=PackageAction(action="approve", posting_id=posting_id).pack(),
-                ),
+                first_button,
                 InlineKeyboardButton(
                     text="Regenerate",
                     callback_data=PackageAction(action="regenerate", posting_id=posting_id).pack(),
@@ -188,6 +202,8 @@ async def _assemble_and_send_package(
     facts_data: dict[str, Any],
     output_dir: Path,
     posting_id: int,
+    *,
+    sources_config: SourcesConfig | None = None,
 ) -> None:
     row = db.get_posting(conn, posting_id)
     if row is None:
@@ -196,6 +212,11 @@ async def _assemble_and_send_package(
 
     required_languages = json.loads(row["required_languages"] or "[]")
     language = "Ukrainian" if "Ukrainian" in required_languages else "English"
+    apply_policy = (
+        sources_config.apply_policy_for(row["source"])
+        if sources_config is not None
+        else "automated"
+    )
 
     try:
         pkg = package.build_package(
@@ -207,6 +228,9 @@ async def _assemble_and_send_package(
             posting_tech_tags=json.loads(row["tech_tags"] or "[]"),
             output_path=output_dir / f"{posting_id}.pdf",
             language=language,
+            source=row["source"],
+            apply_policy=apply_policy,
+            apply_url=row["url"],
         )
     except (package.PackageError, package.RenderError) as exc:
         await message.answer(f"Package preparation failed: {exc}")
@@ -217,11 +241,21 @@ async def _assemble_and_send_package(
     await message.answer_document(
         FSInputFile(pkg.pdf_path), caption=f"CV -- {row['title']} (id {posting_id})"
     )
-    outreach_text = (
-        f"LinkedIn search: {pkg.outreach_url}\n\nDraft message:\n{pkg.outreach_message}\n\n"
-        "(Cover letter not included yet -- on hold pending a model choice.)"
+    if pkg.apply_policy == "manual":
+        checklist_text = "\n".join(f"{i}. {item}" for i, item in enumerate(pkg.checklist, 1))
+        outreach_text = (
+            f"Apply link: {pkg.apply_url}\n\n"
+            f"Checklist:\n{checklist_text}\n\n"
+            f"Message to paste:\n{pkg.outreach_message}"
+        )
+    else:
+        outreach_text = (
+            f"LinkedIn search: {pkg.outreach_url}\n\nDraft message:\n{pkg.outreach_message}\n\n"
+            "(Cover letter not included yet -- on hold pending a model choice.)"
+        )
+    await message.answer(
+        outreach_text, reply_markup=_package_keyboard(posting_id, pkg.apply_policy)
     )
-    await message.answer(outreach_text, reply_markup=_package_keyboard(posting_id))
 
 
 def build_router(
@@ -231,6 +265,7 @@ def build_router(
     on_run: Callable[[], Awaitable[None]] | None = None,
     facts_data: dict[str, Any] | None = None,
     output_dir: Path = DEFAULT_PACKAGE_OUTPUT_DIR,
+    sources_config: SourcesConfig | None = None,
 ) -> Router:
     router = Router()
 
@@ -286,7 +321,12 @@ def build_router(
         await query.answer("Preparing package...")
         if query.message:
             await _assemble_and_send_package(
-                query.message, conn, facts_data, output_dir, callback_data.posting_id
+                query.message,
+                conn,
+                facts_data,
+                output_dir,
+                callback_data.posting_id,
+                sources_config=sources_config,
             )
 
     @router.callback_query(PackageAction.filter(F.action == "approve"))
@@ -308,13 +348,27 @@ def build_router(
         await query.answer("Regenerating...")
         if query.message:
             await _assemble_and_send_package(
-                query.message, conn, facts_data, output_dir, callback_data.posting_id
+                query.message,
+                conn,
+                facts_data,
+                output_dir,
+                callback_data.posting_id,
+                sources_config=sources_config,
             )
 
     @router.callback_query(PackageAction.filter(F.action == "skip"))
     async def handle_package_skip(query: CallbackQuery, callback_data: PackageAction) -> None:
         skip_posting(conn, callback_data.posting_id)
         await query.answer("Skipped.")
+        if query.message:
+            await query.message.edit_reply_markup(reply_markup=None)
+
+    @router.callback_query(PackageAction.filter(F.action == "mark_submitted"))
+    async def handle_package_mark_submitted(
+        query: CallbackQuery, callback_data: PackageAction
+    ) -> None:
+        db.update_posting_status(conn, callback_data.posting_id, "submitted")
+        await query.answer("Marked as submitted.")
         if query.message:
             await query.message.edit_reply_markup(reply_markup=None)
 
@@ -382,11 +436,17 @@ def build_dispatcher(
     on_run: Callable[[], Awaitable[None]] | None = None,
     facts_data: dict[str, Any] | None = None,
     output_dir: Path = DEFAULT_PACKAGE_OUTPUT_DIR,
+    sources_config: SourcesConfig | None = None,
 ) -> Dispatcher:
     dispatcher = Dispatcher()
     dispatcher.include_router(
         build_router(
-            conn, min_score, on_run=on_run, facts_data=facts_data, output_dir=output_dir
+            conn,
+            min_score,
+            on_run=on_run,
+            facts_data=facts_data,
+            output_dir=output_dir,
+            sources_config=sources_config,
         )
     )
     return dispatcher

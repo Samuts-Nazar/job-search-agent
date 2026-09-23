@@ -27,6 +27,32 @@ AUTOMATION_KEYWORDS = [
 
 MAX_OUTREACH_MESSAGE_CHARS = 300
 
+# PROJECT.md §5.7: per-source checklist for a manual-apply-policy
+# (apply_policy: "manual") posting, from live research 2026-09-24. Not
+# config-driven like the policy itself -- this is fixed research-backed
+# content, not a per-user tunable.
+MANUAL_APPLY_CHECKLISTS: dict[str, list[str]] = {
+    "djinni": [
+        "Open the apply link and click Apply / Надіслати відгук.",
+        "Paste the message below into the message field.",
+        "Fill in your email (and name, if asked).",
+        "Djinni requires a LinkedIn profile URL or an attached résumé -- "
+        "provide one (attach the CV PDF above, or paste your LinkedIn URL).",
+    ],
+    "dou": [
+        "Open the apply link and click Відгукнутися.",
+        "If it opens DOU's own form: check dou.ua/edit-profile is current, "
+        "then paste the message below and attach the CV PDF.",
+        "If it redirects to a different site (the employer's own ATS): fill "
+        "that site's own form -- its fields will differ from this checklist -- "
+        "using the CV PDF and the message below as a starting point.",
+    ],
+}
+DEFAULT_MANUAL_APPLY_CHECKLIST = [
+    "Open the apply link and follow that site's own application flow.",
+    "Use the CV PDF and the message below as a starting point.",
+]
+
 
 class PackageError(Exception):
     pass
@@ -82,6 +108,12 @@ class Package:
     outreach_message: str
     ats_result: AtsCheckResult
     content: dict[str, Any] = field(default_factory=dict)
+    # PROJECT.md §5.7: apply_policy is "manual" (djinni/dou -- checklist +
+    # apply_url are populated) or "automated" (everything else -- both stay
+    # empty; automated ATS filling isn't built yet, see build_package).
+    apply_policy: str = "automated"
+    apply_url: str = ""
+    checklist: list[str] = field(default_factory=list)
 
 
 def build_package(
@@ -94,13 +126,21 @@ def build_package(
     posting_tech_tags: list[dict[str, str]] | None,
     output_path: Path | str,
     language: str = "English",
+    source: str = "",
+    apply_policy: str = "automated",
+    apply_url: str = "",
 ) -> Package:
     """Raises PackageError if content validation (§8.5) fails, the
     rendered PDF fails its ATS text-layer checks, or the PDF text
     contains a token not traceable to facts.yaml/the posting title
     (§5.6 step 3's "assert... no missing text", checked end to end, not
     just at the content-dict level). Raises RenderError if the Typst
-    compile itself fails."""
+    compile itself fails.
+
+    `apply_policy`/`apply_url` come from config.SourcesConfig.apply_policy_for
+    and the posting's own URL respectively -- the caller resolves these,
+    this function just uses them to decide whether to attach a manual-apply
+    checklist (see MANUAL_APPLY_CHECKLISTS)."""
     content = build_cv_content(
         facts,
         track_id=track_id,
@@ -126,16 +166,27 @@ def build_package(
         facts, posting_title=posting_title, company=company, language=language
     )
 
+    checklist = (
+        MANUAL_APPLY_CHECKLISTS.get(source, DEFAULT_MANUAL_APPLY_CHECKLIST)
+        if apply_policy == "manual"
+        else []
+    )
+
     return Package(
         pdf_path=pdf_path,
         outreach_url=outreach_url,
         outreach_message=outreach_message,
         ats_result=ats_result,
         content=content,
+        apply_policy=apply_policy,
+        apply_url=apply_url if apply_policy == "manual" else "",
+        checklist=checklist,
     )
 
 
 __all__ = [
+    "DEFAULT_MANUAL_APPLY_CHECKLIST",
+    "MANUAL_APPLY_CHECKLISTS",
     "Package",
     "PackageError",
     "RenderError",

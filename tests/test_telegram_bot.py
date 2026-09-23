@@ -6,6 +6,7 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest
 
 from job_agent import db, telegram_bot
+from job_agent.config import SourcesConfig
 
 
 @pytest.fixture
@@ -302,6 +303,106 @@ async def test_prepare_reports_package_error_without_changing_status(conn, monke
     assert any("Package preparation failed" in text for text in message.answered)
     row = db.get_posting(conn, posting_id)
     assert row["status"] == "scored"
+
+
+def _fake_manual_package(
+    checklist=None, apply_url="https://jobs.dou.ua/companies/acme/vacancies/1/"
+):
+    from job_agent.cv.ats_checks import AtsCheckResult
+    from job_agent.package import Package
+
+    return Package(
+        pdf_path=Path("output/packages/fake.pdf"),
+        outreach_url="",
+        outreach_message="Message to paste.",
+        ats_result=AtsCheckResult(ok=True),
+        content={},
+        apply_policy="manual",
+        apply_url=apply_url,
+        checklist=checklist or ["Step one.", "Step two."],
+    )
+
+
+def test_package_keyboard_manual_policy_shows_mark_as_submitted():
+    keyboard = telegram_bot._package_keyboard(1, apply_policy="manual")
+    button_texts = [button.text for button in keyboard.inline_keyboard[0]]
+    assert button_texts == ["Mark as submitted", "Regenerate", "Skip"]
+
+
+def test_package_keyboard_automated_policy_shows_approve():
+    keyboard = telegram_bot._package_keyboard(1, apply_policy="automated")
+    button_texts = [button.text for button in keyboard.inline_keyboard[0]]
+    assert button_texts == ["Approve", "Regenerate", "Skip"]
+
+
+async def test_prepare_sends_manual_apply_bundle_for_manual_policy_source(conn, monkeypatch):
+    posting_id = insert_scored_posting(conn)  # source="djinni" by default -> manual policy
+    pkg = _fake_manual_package()
+    calls = []
+
+    def fake_build_package(facts_data, **kwargs):
+        calls.append(kwargs)
+        return pkg
+
+    monkeypatch.setattr(telegram_bot.package, "build_package", fake_build_package)
+    router = telegram_bot.build_router(
+        conn,
+        40,
+        facts_data={"candidate": {"name": "X"}},
+        sources_config=SourcesConfig(),
+    )
+    handle_prepare = _get_handler(router, "handle_prepare", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_prepare(query, telegram_bot.PostingAction(action="prepare", posting_id=posting_id))
+
+    assert calls[0]["source"] == "djinni"
+    assert calls[0]["apply_policy"] == "manual"
+    assert calls[0]["apply_url"] == "https://djinni.co/jobs/1/"
+    assert any("Apply link:" in text for text in message.answered)
+    assert any("Checklist:" in text for text in message.answered)
+    assert any("Message to paste:" in text for text in message.answered)
+    assert not any("LinkedIn search" in text for text in message.answered)
+
+
+async def test_prepare_without_sources_config_defaults_to_automated(conn, monkeypatch):
+    posting_id = insert_scored_posting(conn)
+    pkg = _fake_package()
+    calls = []
+
+    def fake_build_package(facts_data, **kwargs):
+        calls.append(kwargs)
+        return pkg
+
+    monkeypatch.setattr(telegram_bot.package, "build_package", fake_build_package)
+    router = telegram_bot.build_router(conn, 40, facts_data={"candidate": {"name": "X"}})
+    handle_prepare = _get_handler(router, "handle_prepare", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_prepare(query, telegram_bot.PostingAction(action="prepare", posting_id=posting_id))
+
+    assert calls[0]["apply_policy"] == "automated"
+
+
+async def test_package_mark_submitted_updates_status_and_clears_markup(conn):
+    posting_id = insert_scored_posting(conn)
+    router = telegram_bot.build_router(conn, 40)
+    handle_mark_submitted = _get_handler(
+        router, "handle_package_mark_submitted", "callback_query"
+    )
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_mark_submitted(
+        query, telegram_bot.PackageAction(action="mark_submitted", posting_id=posting_id)
+    )
+
+    row = db.get_posting(conn, posting_id)
+    assert row["status"] == "submitted"
+    assert message.markup_cleared is True
+    assert query.answered == [("Marked as submitted.", False)]
 
 
 async def test_package_approve_acknowledges(conn):
