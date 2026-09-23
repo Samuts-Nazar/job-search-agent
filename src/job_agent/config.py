@@ -63,19 +63,33 @@ class ModelsConfig(BaseModel):
     eval_candidates: list[ModelEntryField] = Field(default_factory=list)
 
 
+# PROJECT.md §5.7: whether the package flow produces a manual-apply bundle
+# (CV + message + direct apply link + checklist, with a "mark as
+# submitted" button once the user confirms they applied) or -- once built
+# -- hands off to an automated ATS filler. "manual" is not a placeholder
+# for missing automation; for djinni/dou it's a permanent decision (see
+# PROJECT.md §5.7's research note: DOU's own rules explicitly ban
+# automated-application tools, and Djinni's automation policy couldn't be
+# verified, so neither is ever automated regardless of what gets built).
+ApplyPolicy = Literal["manual", "automated"]
+
+
 class DjinniSourceConfig(BaseModel):
     enabled: bool = True
     categories: list[str] = Field(default_factory=list)
+    apply_policy: ApplyPolicy = "manual"
 
 
 class DouSourceConfig(BaseModel):
     enabled: bool = True
     categories: list[str] = Field(default_factory=list)
+    apply_policy: ApplyPolicy = "manual"
 
 
 class RemoteOkSourceConfig(BaseModel):
     enabled: bool = True
     tags: list[str] = Field(default_factory=list)
+    apply_policy: ApplyPolicy = "automated"
 
 
 class WwrSourceConfig(BaseModel):
@@ -87,16 +101,19 @@ class WwrSourceConfig(BaseModel):
     # each item's title, for categories where that's a sound proxy (see
     # sources/wwr.py). {} by default: no source-of-truth match, no guess.
     keyword_categories: dict[str, list[str]] = Field(default_factory=dict)
+    apply_policy: ApplyPolicy = "automated"
 
 
 class LinkedinSourceConfig(BaseModel):
     enabled: bool = True
     keywords: list[str] = Field(default_factory=list)
     results_wanted: int = 40
+    apply_policy: ApplyPolicy = "automated"
 
 
 class NoFluffJobsSourceConfig(BaseModel):
     enabled: bool = False
+    apply_policy: ApplyPolicy = "automated"
 
 
 class SourcesConfig(BaseModel):
@@ -106,6 +123,21 @@ class SourcesConfig(BaseModel):
     wwr: WwrSourceConfig = Field(default_factory=WwrSourceConfig)
     linkedin: LinkedinSourceConfig = Field(default_factory=LinkedinSourceConfig)
     nofluffjobs: NoFluffJobsSourceConfig = Field(default_factory=NoFluffJobsSourceConfig)
+
+    def apply_policy_for(self, source: str) -> ApplyPolicy:
+        """`source` is a posting's own `source` column value (e.g. "djinni",
+        "dou") -- returns "automated" for anything unrecognized rather than
+        raising, so a future new source defaults to the safer (non-manual-
+        bundle) path until explicitly configured."""
+        by_source: dict[str, ApplyPolicy] = {
+            "djinni": self.djinni.apply_policy,
+            "dou": self.dou.apply_policy,
+            "remoteok": self.remoteok.apply_policy,
+            "wwr": self.wwr.apply_policy,
+            "linkedin": self.linkedin.apply_policy,
+            "nofluffjobs": self.nofluffjobs.apply_policy,
+        }
+        return by_source.get(source, "automated")
 
 
 class BudgetConfig(BaseModel):

@@ -54,15 +54,27 @@ models:
     # our own request pace (we were already throttled to <=1 req/3.1s).
     # Only the paid variant above is a real eval candidate.
 
+# Every source below has apply_policy: "manual" or "automated" (PROJECT.md
+# §5.7). "manual" means the package flow always produces a manual-apply
+# bundle (CV + message + direct apply link + checklist, with a "mark as
+# submitted" button) and never attempts automated form-filling for that
+# source, regardless of what gets built later. djinni and dou default to
+# "manual" as a permanent policy decision, not a placeholder: DOU's own
+# rules explicitly ban automated-application tools (verified live
+# 2026-09-22, dou.ua/applications-rules/), and Djinni's own policy on this
+# couldn't be verified either way. Automated ATS filling (once built) only
+# ever applies to "automated"-policy sources.
 sources:
   djinni:
     enabled: true
     categories: ["QA", "QA Automation", "Support", "Sysadmin", "ML AI", "Python"]
+    apply_policy: manual
   dou:
     enabled: true
     # DOU's `category` param (verified live 2026-09-16) has no separate "QA
     # Automation" -- its "QA" category covers both manual and automation.
     categories: ["QA", "Support", "SysAdmin", "AI/ML", "Python"]
+    apply_policy: manual
   remoteok:
     enabled: true
     # remoteok.com/api's `?tag=` query param does NOT filter server-side

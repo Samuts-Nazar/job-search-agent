@@ -57,6 +57,33 @@ def test_load_config_parses_example_file(tmp_path):
     assert config.budget.monthly_usd == 10
 
 
+def test_apply_policy_defaults(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(MINIMAL_YAML, encoding="utf-8")
+    config = load_config(config_path)
+
+    assert config.sources.apply_policy_for("djinni") == "manual"
+    assert config.sources.apply_policy_for("dou") == "manual"
+    assert config.sources.apply_policy_for("remoteok") == "automated"
+    assert config.sources.apply_policy_for("wwr") == "automated"
+    assert config.sources.apply_policy_for("linkedin") == "automated"
+    assert config.sources.apply_policy_for("unknown_future_source") == "automated"
+
+
+def test_apply_policy_overridable_in_config(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        MINIMAL_YAML.replace(
+            'categories: ["QA", "Python"]\n  linkedin:',
+            'categories: ["QA", "Python"]\n    apply_policy: automated\n  linkedin:',
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+
+    assert config.sources.apply_policy_for("djinni") == "automated"
+
+
 def test_load_config_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         load_config(tmp_path / "does-not-exist.yaml")

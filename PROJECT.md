@@ -134,11 +134,21 @@ Triggered by `Prepare package`.
 5. **LinkedIn outreach.** Generate a LinkedIn people-search URL for the company (recruiters / hiring roles) plus a draft message (≤ 300 characters). No scraping, no automated sending, no login.
 6. Send the package to Telegram: PDF, letter, outreach draft with the search link, and buttons `Approve`, `Regenerate`, `Skip`.
 
-### 5.7 Application forms (Phase 3)
+### 5.7 Application forms
+
+Every source has an `apply_policy` in `config.yaml` (`sources.<name>.apply_policy`, `"manual"` or `"automated"`, see `config.example.yaml`) -- this is a per-source **policy decision**, not a stand-in for missing automation, and it's never hardcoded to a specific source in code (`config.SourcesConfig.apply_policy_for(source)` is the single lookup point).
+
+**Manual-apply sources (implemented): Djinni and DOU.** Both default to `apply_policy: manual`, permanently, based on research (2026-09-24):
+- **DOU** has a dedicated, explicit rules page (`dou.ua/applications-rules/`, verified live) that bans automated-application tools by name: *"Не використовуйте інструменти для автоматичних відгуків на вакансії"* -- "Do not use tools for automatic job applications." Violating it risks the profile being blocked. DOU's own apply flow also varies per posting -- some redirect to a third-party ATS the employer chose (confirmed live: a real posting's apply link 302-redirected to `careers-page.com`), others use DOU's own login-gated internal form -- so there's no single flow to automate even setting the policy question aside.
+- **Djinni** has its own apply form supporting an anonymous flow (`anon_apply=true`, no Djinni account required -- confirmed live against a real posting: `message`/`email`/`name` fields, plus a LinkedIn-URL-or-résumé requirement). No dedicated Terms of Service addressing automated submission could be located after a real attempt (tried several plausible URLs; the privacy policy only references "Terms and Conditions" at a broken link). Given that gap, Djinni is treated the same as DOU -- manual -- until that's actually resolved, not because it was found to be prohibited.
+
+For a manual-apply-policy posting, "Prepare package" sends: the CV PDF, a message to paste into the application (the same deterministic template and writing rules as the LinkedIn outreach draft -- see §5.6 step 5, `prompts/outreach_v1.md`), the posting's own URL as the direct apply link, and a short per-source checklist of what the flow actually looks like (from the research above). A **"Mark as submitted"** button lets the user confirm, once they've actually applied by hand, moving the posting to `submitted` status -- this is what feeds real data into the `job stats` application funnel (§5.8) instead of it staying empty.
+
+**Automated ATS filling (Phase 3, not yet implemented): only for `apply_policy: automated` sources** (RemoteOK, WWR, LinkedIn by default -- a posting's specific ATS still needs detecting, e.g. via `ats_vendor.py`).
 - **Known ATS** (Workable, Greenhouse, Lever, Teamtailor first): Playwright fillers per ATS. Fixed fields come from `answers.yaml`. Free-text questions are drafted by the `quality` model under the same fact rules.
 - **Knockout questions** (work authorization, time zone, years of experience, relocation, salary, etc.) are answered only from `answers.yaml`, never generated. If a required answer is missing, stop and ask in Telegram.
 - **Before submit:** never click Submit automatically. Send to Telegram a screenshot plus a field → value list. The user can reply with free-text corrections; the `quality` model converts them into field changes, the form is updated and re-sent. Corrections apply to this application only and are never written back to `answers.yaml`. `Approve` submits.
-- **Unknown sites:** send a field → value map, the PDF and the letter for manual filling. An experimental LLM browser agent (e.g. browser-use) may be added later behind a flag.
+- **Unknown sites** (an `automated`-policy source whose specific ATS isn't recognized): send a field → value map, the PDF and the letter for manual filling -- the same fallback shape as the manual-apply-policy bundle above, just for a different reason (no filler built yet, not a policy choice). An experimental LLM browser agent (e.g. browser-use) may be added later behind a flag.
 
 ### 5.8 Tracking
 SQLite statuses: `new`, `filtered_out`, `scored`, `score_failed`, `skipped`, `package_ready`, `form_filled`, `submitted`, `manual`, `replied`, `rejected`, `interview`. Store timestamps and per-call LLM cost (from OpenRouter usage data).
