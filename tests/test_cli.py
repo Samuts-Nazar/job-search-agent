@@ -4,7 +4,7 @@ import shutil
 import pytest
 from typer.testing import CliRunner
 
-from job_agent import cli, db
+from job_agent import cli, db, dedup
 from job_agent.config import (
     Config,
     DjinniSourceConfig,
@@ -233,6 +233,162 @@ def test_run_pipeline_under_ci_mode_never_prints_posting_or_fact_content(
     assert secret_marker not in captured.err
     assert posting_marker not in captured.out
     assert posting_marker not in captured.err
+
+
+class DummySecrets:
+    openrouter_api_key = "key"
+    telegram_bot_token = "token"
+    telegram_chat_id = "chat"
+
+
+def _patch_for_scoring(monkeypatch, fit_score=80):
+    """Shared setup for tests that need score_posting to actually flip a
+    posting to 'scored' without a real LLM call."""
+    monkeypatch.setattr(cli.facts, "load_facts", lambda path: {})
+    monkeypatch.setattr(cli.facts, "render_facts_summary", lambda data: "facts")
+    monkeypatch.setattr(cli, "make_client", lambda api_key: _NullContextClient())
+
+    valid_result = ScoringResult(
+        fit_score=fit_score,
+        matched_skills=["Python"],
+        missing_skills=[],
+        seniority_match="match",
+        required_languages=["English"],
+        language_mismatch=False,
+        relocation_offered="unknown",
+        remote_type="remote",
+        salary=None,
+        recommended_cv_track="qa_automation",
+        rationale="Good fit.",
+    )
+
+    def fake_score_posting(
+        conn_, client, *, posting_id, posting, config, facts_summary, reasoning_overrides=None
+    ):
+        db.update_posting_status(
+            conn_,
+            posting_id,
+            "scored",
+            fit_score=valid_result.fit_score,
+            verdict=cli.scoring.derive_verdict(valid_result.fit_score, config.active_threshold),
+        )
+        return valid_result
+
+    monkeypatch.setattr(cli.scoring, "score_posting", fake_score_posting)
+
+
+def _insert_stuck_posting(conn, **overrides) -> int:
+    """A posting left in status='new' (the default on insert) -- exactly
+    what an interrupted prior run leaves behind: collected and inserted,
+    but never reached prefilter/scoring."""
+    posting = make_posting(**overrides)
+    posting.canonical_url = posting.url
+    posting.dedup_hash = dedup.compute_dedup_hash(
+        company=posting.company, title=posting.title, description=posting.description
+    )
+    return db.insert_posting(conn, posting)
+
+
+def test_resume_stuck_postings_picks_up_new_status_rows(monkeypatch, config, conn):
+    stuck_id = _insert_stuck_posting(
+        conn, url="https://a/stuck", title="QA Engineer", raw_tags=["QA"]
+    )
+    assert db.get_posting(conn, stuck_id)["status"] == "new"
+
+    _patch_for_scoring(monkeypatch)
+
+    result = cli.resume_stuck_postings(config, DummySecrets(), conn)
+
+    assert result.resumed_count == 1
+    assert result.filtered_out_count == 0
+    assert result.score_failed_count == 0
+    assert [row["id"] for row in result.scored_rows] == [stuck_id]
+    assert db.get_posting(conn, stuck_id)["status"] == "scored"
+
+    runs = db.get_recent_pipeline_runs(conn)
+    assert len(runs) == 1
+    assert runs[0]["kind"] == "resume"
+    assert runs[0]["scored_count"] == 1
+
+
+def test_resume_stuck_postings_noop_when_nothing_stuck(config, conn):
+    result = cli.resume_stuck_postings(config, DummySecrets(), conn)
+
+    assert result == cli.ResumeResult(
+        resumed_count=0, filtered_out_count=0, scored_rows=[], score_failed_count=0
+    )
+    assert db.get_recent_pipeline_runs(conn) == []  # no-op leaves no telemetry noise
+
+
+def test_resume_stuck_postings_also_filters_out_ones_that_no_longer_pass(monkeypatch, config, conn):
+    stuck_id = _insert_stuck_posting(
+        conn, url="https://a/stuck", title="Senior QA Architect", raw_tags=["QA"]
+    )
+    _patch_for_scoring(monkeypatch)
+
+    result = cli.resume_stuck_postings(config, DummySecrets(), conn)
+
+    assert result.filtered_out_count == 1
+    assert result.scored_rows == []
+    row = db.get_posting(conn, stuck_id)
+    assert row["status"] == "filtered_out"
+    assert row["filtered_reason"] == "seniority_stopword:architect"
+
+
+def test_run_pipeline_auto_resumes_stuck_postings_before_collecting(monkeypatch, config, conn):
+    stuck_id = _insert_stuck_posting(
+        conn, url="https://a/stuck", title="QA Engineer", raw_tags=["QA"]
+    )
+
+    monkeypatch.setattr(cli, "collect_all", lambda c, conn=None: ([], []))
+    _patch_for_scoring(monkeypatch)
+
+    scored_rows, source_counts, failed = cli.run_pipeline(config, DummySecrets(), conn)
+
+    assert failed == []
+    assert source_counts == {}
+    assert [row["id"] for row in scored_rows] == [stuck_id]
+    assert db.get_posting(conn, stuck_id)["status"] == "scored"
+
+    kinds = sorted(row["kind"] for row in db.get_recent_pipeline_runs(conn, limit=10))
+    assert kinds == ["resume", "run"]
+
+
+def test_run_pipeline_resumes_the_stuck_original_even_though_dedup_hides_a_recollected_duplicate(
+    monkeypatch, config, conn
+):
+    """The scenario item 1 exists to fix: a posting gets stuck in status=
+    'new' by an interrupted run, and a *later* run's collection re-fetches
+    the same posting from the source. dedup correctly refuses to insert a
+    second copy (same canonical_url) -- but the original must still get
+    finished via the automatic resume step, not sit stuck forever just
+    because dedup considers it "already seen"."""
+    stuck_id = _insert_stuck_posting(
+        conn,
+        url="https://a/stuck",
+        title="QA Engineer",
+        description="We need a QA automation engineer.",
+        raw_tags=["QA"],
+    )
+
+    recollected_duplicate = make_posting(
+        url="https://a/stuck",
+        title="QA Engineer",
+        description="We need a QA automation engineer.",
+        raw_tags=["QA"],
+    )
+    monkeypatch.setattr(cli, "collect_all", lambda c, conn=None: ([recollected_duplicate], []))
+    _patch_for_scoring(monkeypatch)
+
+    scored_rows, source_counts, failed = cli.run_pipeline(config, DummySecrets(), conn)
+
+    rows = conn.execute(
+        "SELECT id, status FROM postings WHERE canonical_url = 'https://a/stuck'"
+    ).fetchall()
+    assert len(rows) == 1  # dedup did not insert a second row for the recollected duplicate
+    assert rows[0]["id"] == stuck_id
+    assert rows[0]["status"] == "scored"  # the original was resumed, not left stuck
+    assert [row["id"] for row in scored_rows] == [stuck_id]
 
 
 class _NullContextClient:
@@ -1147,3 +1303,60 @@ async def test_telegram_process_sends_budget_alert(monkeypatch, tmp_path):
 
     assert sent_messages == [("chat-1", "budget cap approached")]
     conn.close()
+
+
+def test_resume_command_reports_nothing_stuck(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "resume",
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--db",
+            str(tmp_path / "jobs.db"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Nothing stuck" in result.output
+
+
+def test_resume_command_reports_resumed_counts(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    fake_result = cli.ResumeResult(
+        resumed_count=2, filtered_out_count=1, scored_rows=[{"id": 1}], score_failed_count=0
+    )
+    monkeypatch.setattr(cli, "resume_stuck_postings", lambda *a, **k: fake_result)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "resume",
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--db",
+            str(tmp_path / "jobs.db"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Resumed 2 posting(s)" in result.output
+    assert "1 filtered out" in result.output
+    assert "1 scored" in result.output

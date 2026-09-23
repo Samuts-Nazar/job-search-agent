@@ -63,6 +63,8 @@ uv run job check-data   # validate data/facts.yaml and data/answers.yaml (also r
 uv run job doctor       # read-only check of everything a real run needs (data files, config/secrets,
                          # OpenRouter key + credit balance, Telegram bot + chat id, typst/node,
                          # every enabled source, DB schema) -- run this first when something looks broken
+uv run job resume       # finish any posting left in status='new' by an interrupted prior run;
+                         # `job` also runs this automatically first, so this is mainly for manual checks
 uv run job render-test  # render the CV template against data.example content, run ATS + OpenResume checks
 uv run job export       # dump postings/scores/applications to CSV in output/export/ for outside analysis
 uv run job analyze --rescore  # re-score every stored posting with the current model/prompt

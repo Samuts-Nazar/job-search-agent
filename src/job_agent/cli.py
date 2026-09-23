@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -112,29 +113,22 @@ def _posting_from_row(row: sqlite3.Row) -> Posting:
     )
 
 
-def run_pipeline(
+def _prefilter_and_score(
     config: Config,
     secrets: Secrets,
     conn: sqlite3.Connection,
+    inserted: list[tuple[int, Posting]],
     *,
     facts_path: str = data_guard.FACTS_PATH,
-) -> tuple[list[sqlite3.Row], dict[str, int], list[str]]:
-    started_at = db.now_iso()
-    typer.echo("Collecting postings...")
-    raw_postings, failed_sources = collect_all(config, conn)
-    source_counts_this_run = _count_by_source(raw_postings)
-    typer.echo(f"Collected {len(raw_postings)} postings: {source_counts_this_run}")
-
-    new_postings = dedup.dedup_new_postings(conn, raw_postings)
-    typer.echo(f"{len(new_postings)} new after dedup.")
-
-    for posting in new_postings:
-        posting.ats_vendor = ats_vendor.detect_ats_vendor(posting.url)
-
-    inserted: list[tuple[int, Posting]] = [
-        (db.insert_posting(conn, posting), posting) for posting in new_postings
-    ]
-
+) -> tuple[list[sqlite3.Row], int]:
+    """Prefilters `inserted` (posting_id, Posting) pairs already in the DB
+    and scores the ones that pass, updating each posting's stored status
+    in place. Shared by run_pipeline (freshly-collected postings) and
+    resume_stuck_postings (postings left in status='new' by an
+    interrupted prior run), so both apply identical prefilter/scoring
+    logic. Returns (scored_rows, filtered_out_count) -- the kept count is
+    len(inserted) - filtered_out_count, since prefilter partitions every
+    input posting into exactly one of kept/filtered_out."""
     kept, filtered_out = prefilter.prefilter_postings(
         [posting for _, posting in inserted],
         categories=config.categories,
@@ -146,8 +140,6 @@ def run_pipeline(
         reason = filtered_reasons.get(posting.canonical_url)
         if reason is not None:
             db.update_posting_status(conn, posting_id, "filtered_out", filtered_reason=reason)
-
-    typer.echo(f"{len(kept)} passed prefilter, scoring...")
 
     facts_data = facts.load_facts(facts_path)
     facts_summary = facts.render_facts_summary(facts_data)
@@ -171,6 +163,104 @@ def run_pipeline(
             if row is not None and row["status"] == "scored":
                 scored_rows.append(row)
 
+    return scored_rows, len(filtered_out)
+
+
+@dataclass
+class ResumeResult:
+    resumed_count: int
+    filtered_out_count: int
+    scored_rows: list[sqlite3.Row]
+    score_failed_count: int
+
+
+def resume_stuck_postings(
+    config: Config,
+    secrets: Secrets,
+    conn: sqlite3.Connection,
+    *,
+    facts_path: str = data_guard.FACTS_PATH,
+) -> ResumeResult:
+    """Picks up postings left in status='new' by a prior run that was
+    interrupted between insert and prefilter/scoring. dedup.py's
+    posting_exists() check is keyed on canonical_url/dedup_hash alone, not
+    status, so once a posting is inserted it is never re-collected
+    regardless of status -- a stuck 'new' row would otherwise sit forever
+    with no future run ever surfacing it again. A no-op (returns zeros,
+    inserts no pipeline_runs row) when nothing is stuck; safe to call on
+    every run. Also the body of the standalone `job resume` command."""
+    started_at = db.now_iso()
+    rows = db.get_postings_by_status(conn, "new")
+    if not rows:
+        return ResumeResult(
+            resumed_count=0, filtered_out_count=0, scored_rows=[], score_failed_count=0
+        )
+
+    inserted: list[tuple[int, Posting]] = [(row["id"], _posting_from_row(row)) for row in rows]
+    for _, posting in inserted:
+        posting.ats_vendor = ats_vendor.detect_ats_vendor(posting.url)
+
+    scored_rows, filtered_out_count = _prefilter_and_score(
+        config, secrets, conn, inserted, facts_path=facts_path
+    )
+    score_failed_count = len(inserted) - filtered_out_count - len(scored_rows)
+
+    db.insert_pipeline_run(
+        conn,
+        kind="resume",
+        started_at=started_at,
+        finished_at=db.now_iso(),
+        collected_count=0,
+        new_count=0,
+        filtered_out_count=filtered_out_count,
+        scored_count=len(scored_rows),
+        score_failed_count=score_failed_count,
+        source_counts={},
+        cost_usd=db.total_cost_usd(conn, since_iso=started_at),
+    )
+    return ResumeResult(
+        resumed_count=len(inserted),
+        filtered_out_count=filtered_out_count,
+        scored_rows=scored_rows,
+        score_failed_count=score_failed_count,
+    )
+
+
+def run_pipeline(
+    config: Config,
+    secrets: Secrets,
+    conn: sqlite3.Connection,
+    *,
+    facts_path: str = data_guard.FACTS_PATH,
+) -> tuple[list[sqlite3.Row], dict[str, int], list[str]]:
+    started_at = db.now_iso()
+
+    resume_result = resume_stuck_postings(config, secrets, conn, facts_path=facts_path)
+    if resume_result.resumed_count:
+        typer.echo(
+            f"Resumed {resume_result.resumed_count} posting(s) stuck from an interrupted "
+            "prior run."
+        )
+
+    typer.echo("Collecting postings...")
+    raw_postings, failed_sources = collect_all(config, conn)
+    source_counts_this_run = _count_by_source(raw_postings)
+    typer.echo(f"Collected {len(raw_postings)} postings: {source_counts_this_run}")
+
+    new_postings = dedup.dedup_new_postings(conn, raw_postings)
+    typer.echo(f"{len(new_postings)} new after dedup.")
+
+    for posting in new_postings:
+        posting.ats_vendor = ats_vendor.detect_ats_vendor(posting.url)
+
+    inserted: list[tuple[int, Posting]] = [
+        (db.insert_posting(conn, posting), posting) for posting in new_postings
+    ]
+
+    typer.echo(f"Scoring {len(inserted)} newly collected posting(s)...")
+    scored_rows, filtered_out_count = _prefilter_and_score(
+        config, secrets, conn, inserted, facts_path=facts_path
+    )
     typer.echo(f"Scored {len(scored_rows)} postings.")
 
     db.insert_pipeline_run(
@@ -180,13 +270,13 @@ def run_pipeline(
         finished_at=db.now_iso(),
         collected_count=len(raw_postings),
         new_count=len(new_postings),
-        filtered_out_count=len(filtered_out),
+        filtered_out_count=filtered_out_count,
         scored_count=len(scored_rows),
-        score_failed_count=len(kept) - len(scored_rows),
+        score_failed_count=len(inserted) - filtered_out_count - len(scored_rows),
         source_counts=source_counts_this_run,
         cost_usd=db.total_cost_usd(conn, since_iso=started_at),
     )
-    return scored_rows, source_counts_this_run, failed_sources
+    return resume_result.scored_rows + scored_rows, source_counts_this_run, failed_sources
 
 
 async def _send_digest(
@@ -529,6 +619,45 @@ def doctor(
     typer.echo(doctor_module.format_doctor_report(checks))
     if not all(check.ok for check in checks):
         raise typer.Exit(code=1)
+
+
+@app.command()
+def resume(
+    config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+    env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+    facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
+) -> None:
+    """Picks up any posting left in status='new' by an interrupted prior
+    run (collected but never reached prefilter/scoring) and finishes
+    processing it. `job` already runs this automatically as its first
+    step -- this standalone command is for checking/fixing state without
+    a full collection run, e.g. right after `job doctor` or a crash.
+    """
+    try:
+        config = load_config(config_path)
+        secrets = load_secrets(env_path)
+    except FileNotFoundError as exc:
+        _echo_error(exc)
+        raise typer.Exit(code=1) from exc
+    except ValidationError as exc:
+        _echo_error(exc, prefix=f"Missing or invalid secrets in {env_path}: ")
+        raise typer.Exit(code=1) from exc
+
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    try:
+        result = resume_stuck_postings(config, secrets, conn, facts_path=facts_path)
+    finally:
+        conn.close()
+
+    if result.resumed_count == 0:
+        typer.echo("Nothing stuck -- no postings in status='new'.")
+    else:
+        typer.echo(
+            f"Resumed {result.resumed_count} posting(s): {result.filtered_out_count} filtered "
+            f"out, {len(result.scored_rows)} scored, {result.score_failed_count} score_failed."
+        )
 
 
 @app.command(name="render-test")

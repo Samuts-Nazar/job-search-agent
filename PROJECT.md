@@ -10,7 +10,7 @@ The repository is public (portfolio). No personal data may ever be committed.
 
 ## 2. Run model
 
-- Entry point: a CLI command `job` (e.g. Typer). Subcommands: `job` (full run), `job eval` (model evaluation), `job stats`, `job render-test` (template check), `job doctor` (read-only environment/connectivity check -- data files, config/secrets load, OpenRouter key + credit balance, Telegram bot + chat id, typst/node on PATH, every enabled source reachable, DB schema currency; run this first when something looks broken).
+- Entry point: a CLI command `job` (e.g. Typer). Subcommands: `job` (full run), `job eval` (model evaluation), `job stats`, `job render-test` (template check), `job doctor` (read-only environment/connectivity check -- data files, config/secrets load, OpenRouter key + credit balance, Telegram bot + chat id, typst/node on PATH, every enabled source reachable, DB schema currency; run this first when something looks broken), `job resume` (finishes any posting left in status='new' by an interrupted prior run -- `job` also runs this automatically as its first step, since dedup keys on canonical_url/dedup_hash alone and would otherwise never resurface a stuck row).
 - `job` runs the pipeline, then keeps running to handle Telegram interactions until the user stops the process (Ctrl+C). There is no daemon, no systemd service, no scheduler.
 - On start, process pending Telegram updates first. Telegram keeps undelivered updates for at most 24 hours; older button presses are lost. All state lives in SQLite, and the bot command `/pending` re-sends every package still awaiting a decision.
 - Graceful shutdown: finish the current step, persist state, exit.
