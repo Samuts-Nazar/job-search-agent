@@ -241,6 +241,48 @@ async def test_prepare_builds_and_sends_package(conn, monkeypatch):
     assert row["status"] == "package_ready"
 
 
+async def test_prepare_passes_ukrainian_language_when_required(conn, monkeypatch):
+    posting_id = insert_scored_posting(
+        conn, required_languages=json.dumps(["Ukrainian"])
+    )
+    pkg = _fake_package()
+    calls = []
+
+    def fake_build_package(facts_data, **kwargs):
+        calls.append(kwargs)
+        return pkg
+
+    monkeypatch.setattr(telegram_bot.package, "build_package", fake_build_package)
+    router = telegram_bot.build_router(conn, 40, facts_data={"candidate": {"name": "X"}})
+    handle_prepare = _get_handler(router, "handle_prepare", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_prepare(query, telegram_bot.PostingAction(action="prepare", posting_id=posting_id))
+
+    assert calls[0]["language"] == "Ukrainian"
+
+
+async def test_prepare_defaults_to_english_language(conn, monkeypatch):
+    posting_id = insert_scored_posting(conn, required_languages=json.dumps(["English"]))
+    pkg = _fake_package()
+    calls = []
+
+    def fake_build_package(facts_data, **kwargs):
+        calls.append(kwargs)
+        return pkg
+
+    monkeypatch.setattr(telegram_bot.package, "build_package", fake_build_package)
+    router = telegram_bot.build_router(conn, 40, facts_data={"candidate": {"name": "X"}})
+    handle_prepare = _get_handler(router, "handle_prepare", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_prepare(query, telegram_bot.PostingAction(action="prepare", posting_id=posting_id))
+
+    assert calls[0]["language"] == "English"
+
+
 async def test_prepare_reports_package_error_without_changing_status(conn, monkeypatch):
     posting_id = insert_scored_posting(conn)
 

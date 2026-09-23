@@ -37,16 +37,39 @@ def mentions_automation(text: str) -> bool:
     return any(keyword in lowered for keyword in AUTOMATION_KEYWORDS)
 
 
-def build_outreach_message(facts: dict[str, Any], *, posting_title: str, company: str) -> str:
-    """Short, deterministic template (<=300 chars) -- not LLM-generated,
-    so this doesn't need a model choice the way the (on-hold) cover
-    letter does. Every value comes from facts.yaml or the posting."""
+def _is_ukrainian(language: str) -> bool:
+    return language.strip().lower().startswith("ukrain")
+
+
+def build_outreach_message(
+    facts: dict[str, Any], *, posting_title: str, company: str, language: str = "English"
+) -> str:
+    """Short, deterministic template (<=300 chars) following the same
+    writing rules as prompts/outreach_v1.md (facts.yaml only, no dashes,
+    no banned phrases, language-matched, formal greeting, no Ukrainian
+    sign-off) -- not LLM-generated, so this doesn't need a model choice
+    the way the (on-hold) cover letter does. `language` should be the
+    posting's own language (e.g. from its required_languages); defaults
+    to English. Every value comes from facts.yaml or the posting."""
     candidate_name = facts["candidate"]["name"]
-    role_part = f"the {posting_title} role at {company}" if company else f"the {posting_title} role"
-    message = (
-        f"Hi! I'm applying for {role_part}. "
-        f"Happy to share more about my background. Best, {candidate_name}"
-    )
+
+    if _is_ukrainian(language):
+        role_part = (
+            f"позицію {posting_title} у {company}" if company else f"позицію {posting_title}"
+        )
+        message = (
+            f"Доброго дня\n\n"
+            f"Подаюся на {role_part}. Готовий поділитися деталями про свій досвід. "
+            f"{candidate_name}"
+        )
+    else:
+        role_part = f"{posting_title} at {company}" if company else posting_title
+        message = (
+            f"Dear Hiring Team,\n\n"
+            f"I'm applying for {role_part}. Happy to share more about my background. "
+            f"Best, {candidate_name}"
+        )
+
     if len(message) > MAX_OUTREACH_MESSAGE_CHARS:
         message = message[: MAX_OUTREACH_MESSAGE_CHARS - 1].rstrip() + "…"
     return message
@@ -70,6 +93,7 @@ def build_package(
     description: str,
     posting_tech_tags: list[dict[str, str]] | None,
     output_path: Path | str,
+    language: str = "English",
 ) -> Package:
     """Raises PackageError if content validation (§8.5) fails, the
     rendered PDF fails its ATS text-layer checks, or the PDF text
@@ -98,7 +122,9 @@ def build_package(
         raise PackageError("ATS check failed: " + "; ".join(all_problems))
 
     outreach_url = build_people_search_url(company) if company else ""
-    outreach_message = build_outreach_message(facts, posting_title=posting_title, company=company)
+    outreach_message = build_outreach_message(
+        facts, posting_title=posting_title, company=company, language=language
+    )
 
     return Package(
         pdf_path=pdf_path,

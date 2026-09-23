@@ -194,6 +194,9 @@ async def _assemble_and_send_package(
         await message.answer(f"No posting with id {posting_id}.")
         return
 
+    required_languages = json.loads(row["required_languages"] or "[]")
+    language = "Ukrainian" if "Ukrainian" in required_languages else "English"
+
     try:
         pkg = package.build_package(
             facts_data,
@@ -203,6 +206,7 @@ async def _assemble_and_send_package(
             description=row["description"],
             posting_tech_tags=json.loads(row["tech_tags"] or "[]"),
             output_path=output_dir / f"{posting_id}.pdf",
+            language=language,
         )
     except (package.PackageError, package.RenderError) as exc:
         await message.answer(f"Package preparation failed: {exc}")

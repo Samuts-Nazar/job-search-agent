@@ -1,3 +1,4 @@
+import re
 import shutil
 
 import pytest
@@ -42,6 +43,44 @@ def test_build_outreach_message_truncates_long_titles():
     )
     assert len(message) <= package.MAX_OUTREACH_MESSAGE_CHARS
     assert message.endswith("…")
+
+
+def test_build_outreach_message_defaults_to_english_greeting():
+    message = package.build_outreach_message(
+        FACTS, posting_title="QA Engineer", company="Acme"
+    )
+    assert message.startswith("Dear Hiring Team,")
+
+
+def test_build_outreach_message_ukrainian_greeting_and_no_signoff():
+    message = package.build_outreach_message(
+        FACTS, posting_title="QA Engineer", company="Acme", language="Ukrainian"
+    )
+    assert message.startswith("Доброго дня")
+    assert "Дякую" not in message
+    assert "З повагою" not in message
+    assert "QA Engineer" in message
+    assert "Jane Example" in message
+
+
+BANNED_PHRASES = [
+    "excited to apply",
+    "passionate about",
+    "great fit",
+    "з великим ентузіазмом",
+]
+
+
+def test_build_outreach_message_has_no_banned_phrases_or_dash_punctuation():
+    for language in ("English", "Ukrainian"):
+        message = package.build_outreach_message(
+            FACTS, posting_title="QA Engineer", company="Acme Corp", language=language
+        )
+        lowered = message.lower()
+        for phrase in BANNED_PHRASES:
+            assert phrase not in lowered
+        assert "—" not in message and "–" not in message
+        assert not re.search(r"\S \-\-? \S", message)
 
 
 def test_build_package_raises_on_invalid_content(monkeypatch, tmp_path):
