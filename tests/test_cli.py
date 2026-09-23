@@ -516,6 +516,63 @@ def test_analyze_rescore_calls_score_posting_for_every_stored_posting(monkeypatc
     assert all(record_as_primary is False for _pid, record_as_primary in calls)
 
 
+def test_analyze_rescore_ids_and_record_primary_scope_and_overwrite(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    posting1 = make_posting()
+    posting1.canonical_url = posting1.url
+    posting1.dedup_hash = "hash1"
+    posting1_id = db.insert_posting(conn, posting1)
+
+    posting2 = make_posting(url="https://a/2")
+    posting2.canonical_url = "https://a/2"
+    posting2.dedup_hash = "hash2"
+    db.insert_posting(conn, posting2)
+    conn.close()
+
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(cli, "make_client", lambda api_key: _NullContextClient())
+    monkeypatch.setattr(cli.facts, "load_facts", lambda path: {})
+    monkeypatch.setattr(cli.facts, "render_facts_summary", lambda data: "facts")
+
+    calls = []
+
+    def fake_score_posting(conn_, client, *, posting_id, posting, config, facts_summary, **kwargs):
+        calls.append((posting_id, kwargs.get("record_as_primary")))
+        return None
+
+    monkeypatch.setattr(cli.scoring, "score_posting", fake_score_posting)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "analyze",
+            "--rescore",
+            "--ids",
+            str(posting1_id),
+            "--record-primary",
+            "--db",
+            str(db_path),
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--facts",
+            "data.example/facts.example.yaml",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [(posting1_id, True)]  # only the scoped id, with primary overwritten
+
+
 def test_analyze_readmit_scores_newly_passing_and_leaves_the_rest_filtered(monkeypatch, tmp_path):
     db_path = tmp_path / "jobs.db"
     conn = db.connect(db_path)

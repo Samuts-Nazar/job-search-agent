@@ -374,8 +374,13 @@ def get_postings_by_status(conn: sqlite3.Connection, status: PostingStatus) -> l
 
 
 def get_all_postings(
-    conn: sqlite3.Connection, *, limit: int | None = None
+    conn: sqlite3.Connection, *, limit: int | None = None, ids: list[int] | None = None
 ) -> list[sqlite3.Row]:
+    if ids is not None:
+        placeholders = ", ".join("?" for _ in ids)
+        return conn.execute(
+            f"SELECT * FROM postings WHERE id IN ({placeholders}) ORDER BY id", ids
+        ).fetchall()
     query = "SELECT * FROM postings ORDER BY id"
     if limit is not None:
         query += " LIMIT ?"

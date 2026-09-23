@@ -443,6 +443,18 @@ def test_get_all_postings(conn):
     assert len(db.get_all_postings(conn, limit=1)) == 1
 
 
+def test_get_all_postings_filters_by_ids(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    id3 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/3/", dedup_hash="hash3")
+    )
+    rows = db.get_all_postings(conn, ids=[id3, id1])
+    assert [row["id"] for row in rows] == [id1, id3]  # ordered by id, not input order
+
+
 # --- scoring_runs ----------------------------------------------------------
 
 

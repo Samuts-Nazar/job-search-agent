@@ -587,6 +587,20 @@ def analyze(
         help="Re-check filtered-out postings against the current prefilter and "
         "score any that now pass, as primary results (e.g. after a prefilter fix).",
     ),
+    ids: str | None = typer.Option(
+        None,
+        "--ids",
+        help="Comma-separated posting ids to limit --rescore to, instead of every "
+        "stored posting (e.g. after a data-correction bug affecting only a few rows).",
+    ),
+    record_primary: bool = typer.Option(
+        False,
+        "--record-primary",
+        help="With --rescore, overwrite the posting's own primary fit_score/verdict/"
+        "etc. (normally --rescore only appends a scoring_runs history row). Use this "
+        "to correct primary results that were computed from bad stored data, e.g. a "
+        "title/description that has since been fixed.",
+    ),
     config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
     db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
@@ -596,7 +610,10 @@ def analyze(
     """--rescore: re-run scoring over every stored posting (including
     previously filtered-out ones) with the current model and prompt
     version, appending a new scoring_runs row per posting without touching
-    the posting's own primary result -- safe to run repeatedly.
+    the posting's own primary result -- safe to run repeatedly. Pass
+    --record-primary to instead overwrite the primary result (e.g. to
+    correct postings scored before a data bug was fixed), optionally
+    scoped to --ids.
 
     --readmit: re-check filtered-out postings against the current
     prefilter and score any that now pass, as primary results. The two can
@@ -634,7 +651,8 @@ def analyze(
             )
 
         if rescore:
-            rows = db.get_all_postings(conn, limit=limit)
+            id_list = [int(x) for x in ids.split(",")] if ids else None
+            rows = db.get_all_postings(conn, limit=limit, ids=id_list)
             typer.echo(f"Re-scoring {len(rows)} stored postings...")
 
             rescored = 0
@@ -649,11 +667,12 @@ def analyze(
                         config=config,
                         facts_summary=facts_summary,
                         reasoning_overrides=reasoning_overrides,
-                        record_as_primary=False,
+                        record_as_primary=record_primary,
                     )
                     if result is not None:
                         rescored += 1
-            typer.echo(f"Re-scored {rescored}/{len(rows)} postings (new scoring_runs rows).")
+            suffix = "primary result updated" if record_primary else "new scoring_runs rows"
+            typer.echo(f"Re-scored {rescored}/{len(rows)} postings ({suffix}).")
     finally:
         conn.close()
 
