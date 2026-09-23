@@ -51,12 +51,28 @@ def entry_published_at(entry: feedparser.FeedParserDict) -> str | None:
     return datetime(*parsed[:6], tzinfo=UTC).isoformat()
 
 
+# Verified live 2026-09-23 against every stored djinni/dou/wwr row (480
+# postings, 0 exceptions): title_detail["value"] == title and
+# summary_detail["value"] == summary always -- feedparser sets title/
+# summary AS an alias of the corresponding *_detail["value"], it isn't
+# separately-derived data. links[] likewise only ever duplicates the
+# single `link` field already stored under its own key. Nothing in this
+# app reads any of the three. Dropping them roughly halved WWR's average
+# stored raw_payload size (its descriptions are the longest of the three
+# sources, so the duplicated summary_detail was the single biggest
+# contributor there) with no loss of information actually used anywhere.
+_REDUNDANT_ENTRY_KEYS = ("title_detail", "summary_detail", "links")
+
+
 def entry_raw_payload(entry: feedparser.FeedParserDict) -> str:
-    """JSON dump of every field feedparser exposed for this entry, so a
-    posting can be re-analyzed later without re-fetching the feed.
-    default=str covers non-JSON-native values (e.g. time.struct_time on
-    the *_parsed fields)."""
-    return json.dumps(dict(entry), default=str, ensure_ascii=False)
+    """JSON dump of every field feedparser exposed for this entry, minus
+    _REDUNDANT_ENTRY_KEYS, so a posting can be re-analyzed later without
+    re-fetching the feed. default=str covers non-JSON-native values (e.g.
+    time.struct_time on the *_parsed fields)."""
+    data = dict(entry)
+    for key in _REDUNDANT_ENTRY_KEYS:
+        data.pop(key, None)
+    return json.dumps(data, default=str, ensure_ascii=False)
 
 
 _TITLE_COMPANY_UK_RE = re.compile(r"^(?P<title>.+?)\s+в\s+(?P<company>.+?)\s*$")
