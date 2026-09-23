@@ -9,10 +9,20 @@ pubDate/guid/category per item, and no dedicated remote-only filter param.
 Company, salary and location are packed into the title as free text, e.g.
 "Manual QA Engineer в Solidium Technology, $700-1000, віддалено"
 ("<title> в <company>, <salary>, <location-or-remote-marker>").
+
+Verified live 2026-09-24 (found via a real end-to-end CV package check --
+posting #110's title showed up as "AI &amp; SaaS" verbatim): feedparser
+marks DOU's <title>/<description> as content type text/html, and for that
+type it deliberately leaves entities un-decoded (its convention is that
+html-typed content may be double-escaped, so decoding is left to the
+consumer). html.unescape() on both fixes it; description keeps its real
+HTML tags (`&lt;`/no matching pair was never present in stored data, so
+this isn't double-escaped HTML, just plain entity leakage).
 """
 
 from __future__ import annotations
 
+import html
 import re
 
 import feedparser
@@ -61,13 +71,15 @@ def parse_dou_rss(raw_xml: str, category: str) -> list[Posting]:
     feed: feedparser.FeedParserDict = feedparser.parse(raw_xml)
     postings = []
     for entry in feed.entries:
-        title, company, salary, location, is_remote = _parse_title(entry.title)
+        raw_title = html.unescape(entry.title)
+        description = html.unescape(entry.get("summary", ""))
+        title, company, salary, location, is_remote = _parse_title(raw_title)
         postings.append(
             Posting(
                 source="dou",
                 url=entry.link,
                 title=title,
-                description=entry.get("summary", ""),
+                description=description,
                 company=company,
                 location=location,
                 remote_type="remote" if is_remote else None,

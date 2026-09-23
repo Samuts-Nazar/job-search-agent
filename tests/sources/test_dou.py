@@ -52,3 +52,31 @@ def test_parse_dou_rss_returns_normalized_postings():
     assert first.raw_payload is not None
     payload = json.loads(first.raw_payload)
     assert payload["link"] == first.url
+
+
+ENTITY_ENCODED_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+<title>Вакансії в категорії QA на DOU.ua</title>
+<item>
+  <title>Manual QA Engineer for CRM &amp; Data Team в A-listware, віддалено</title>
+  <link>https://jobs.dou.ua/companies/a-listware/vacancies/1/</link>
+  <description><p>Looking for QA &amp; automation skills, 5+ years &gt; required</p></description>
+</item>
+</channel></rss>
+"""
+
+
+def test_parse_dou_rss_decodes_html_entities():
+    # found live 2026-09-24: feedparser leaves entities un-decoded for
+    # text/html-typed content ("AI &amp; SaaS" stayed literal in a real
+    # stored title) -- must be unescaped before use.
+    postings = parse_dou_rss(ENTITY_ENCODED_RSS, category="QA")
+
+    assert len(postings) == 1
+    posting = postings[0]
+    assert posting.title == "Manual QA Engineer for CRM & Data Team"
+    assert posting.company == "A-listware"
+    assert "&amp;" not in posting.description
+    assert "QA & automation" in posting.description
+    # a real <p> tag (not entity-escaped) survives untouched
+    assert "<p>" in posting.description
