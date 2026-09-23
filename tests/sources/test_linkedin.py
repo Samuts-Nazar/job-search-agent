@@ -116,3 +116,30 @@ def test_collect_linkedin_splits_budget_and_skips_disabled(monkeypatch):
 
     disabled = LinkedinSourceConfig(enabled=False, keywords=["QA"])
     assert linkedin.collect_linkedin(disabled) == []
+
+
+def test_split_budget_distributes_remainder_instead_of_discarding_it():
+    assert linkedin._split_budget(40, 6) == [7, 7, 7, 7, 6, 6]  # sums to 40, not 36
+    assert linkedin._split_budget(50, 6) == [9, 9, 8, 8, 8, 8]  # sums to 50
+    assert linkedin._split_budget(6, 6) == [1, 1, 1, 1, 1, 1]
+    assert linkedin._split_budget(3, 6) == [1, 1, 1, 1, 1, 1]  # never below 1/keyword
+
+
+def test_collect_linkedin_requests_full_configured_budget_per_run(monkeypatch):
+    monkeypatch.setattr(linkedin.time, "sleep", lambda _seconds: None)
+    requested = []
+
+    def fake_scrape_jobs(**kwargs):
+        requested.append(kwargs["results_wanted"])
+        return pd.DataFrame(SAMPLE_ROWS[:1])
+
+    monkeypatch.setattr(linkedin, "scrape_jobs", fake_scrape_jobs)
+
+    config = LinkedinSourceConfig(
+        enabled=True,
+        keywords=["QA", "QA Automation", "Support", "Sysadmin", "Machine Learning", "Python"],
+        results_wanted=40,
+    )
+    linkedin.collect_linkedin(config)
+
+    assert sum(requested) == 40  # the old `40 // 6` split only ever requested 36

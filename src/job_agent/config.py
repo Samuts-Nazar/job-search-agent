@@ -107,7 +107,10 @@ class WwrSourceConfig(BaseModel):
 class LinkedinSourceConfig(BaseModel):
     enabled: bool = True
     keywords: list[str] = Field(default_factory=list)
-    results_wanted: int = 40
+    # Top of PROJECT.md's stated ~25-50/run safety band (line 85) -- see
+    # job_agent/sources/linkedin.py's module docstring for why 50, not a
+    # higher number, is the safe target.
+    results_wanted: int = 50
     apply_policy: ApplyPolicy = "automated"
 
 

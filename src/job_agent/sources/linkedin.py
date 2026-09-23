@@ -7,6 +7,22 @@ search -- no login, no user account. `description` is None unless
 result; PROJECT.md caps this source at ~25-50 results/run with randomized
 delays, so `collect_linkedin` splits the budget across keywords and sleeps
 a random interval between per-keyword searches.
+
+Investigated live 2026-09-23 why real runs were landing around ~33
+postings against a configured results_wanted of 40 (well under
+Djinni/DOU's per-run volume): ran collect_linkedin_for_keyword directly
+against the real guest endpoint for every configured keyword at the
+then-current per-keyword budget. Every single keyword returned exactly
+the number of results requested, with zero duplicates across keywords and
+no 429s/shortfalls -- ruling out guest-endpoint throttling, the search
+terms themselves, and category mapping as the bottleneck. The actual
+cause was `_split_budget`'s predecessor (`total // len(keywords)`), which
+silently discarded the remainder (40 // 6 = 6/keyword, using only 36 of
+the configured 40 every run). `_split_budget` now distributes the
+remainder instead of dropping it. The ~25-50/run ceiling itself is a
+deliberate PROJECT.md safety choice (line 85), not a technical limit this
+investigation found -- results_wanted should stay inside that band rather
+than being raised past it.
 """
 
 from __future__ import annotations
@@ -67,12 +83,25 @@ def collect_linkedin_for_keyword(keyword: str, *, results_wanted: int) -> list[P
     return [row_to_posting(row) for row in df.to_dict(orient="records")]
 
 
+def _split_budget(total: int, n: int) -> list[int]:
+    """Distributes `total` across `n` keywords as evenly as possible,
+    handing the remainder to the first keywords one each rather than
+    floor-dividing and silently discarding it -- verified live 2026-09-23
+    that a plain `total // n` split throws away up to n-1 results/run for
+    free (each keyword request returned exactly what was asked, no
+    guest-endpoint shortfall observed), which was the actual reason
+    real runs landed under the configured results_wanted rather than any
+    LinkedIn-side limit."""
+    base, remainder = divmod(total, n)
+    return [max(1, base + (1 if i < remainder else 0)) for i in range(n)]
+
+
 def collect_linkedin(config: LinkedinSourceConfig) -> list[Posting]:
     if not config.enabled or not config.keywords:
         return []
-    per_keyword = max(1, config.results_wanted // len(config.keywords))
+    budgets = _split_budget(config.results_wanted, len(config.keywords))
     postings: list[Posting] = []
-    for index, keyword in enumerate(config.keywords):
+    for index, (keyword, per_keyword) in enumerate(zip(config.keywords, budgets, strict=True)):
         postings.extend(collect_linkedin_for_keyword(keyword, results_wanted=per_keyword))
         if index < len(config.keywords) - 1:
             time.sleep(random.uniform(2, 6))
