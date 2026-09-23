@@ -6,6 +6,7 @@ the posting appear verbatim (no ligature breakage); no missing text."
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,61 @@ def _check_required_terms(text: str, required_terms: list[str]) -> list[str]:
     ]
 
 
+# A single capital letter, a space, then 2+ lowercase letters -- found live
+# 2026-09-24: DejaVu Sans's default kerning after "T" (fixed by
+# template.typ's kerning: false) made pypdf's text extraction insert a
+# stray space ("Telegram" -> "T elegram", "DevTools" -> "DevT ools"),
+# which would silently break ATS keyword matching on a submitted
+# application. Kept as a permanent regression guard even after the fix,
+# in case a font/Typst change reintroduces it or a different letter.
+_SPLIT_WORD_RE = re.compile(r"\b[A-Z] [a-z]{2,}")
+
+
+def _check_no_split_words(text: str) -> list[str]:
+    matches = sorted(set(_SPLIT_WORD_RE.findall(text)))
+    if not matches:
+        return []
+    return [
+        f"possible kerning/text-extraction artifact: {matches!r} -- a capital letter "
+        "followed by a stray space (see template.typ's kerning: false)"
+    ]
+
+
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+# Static text the template always emits, independent of facts.yaml/the
+# posting -- section headers and the like.
+_STRUCTURAL_TOKENS = {"technical", "skills", "projects", "experience", "education"}
+
+
+def _collect_tokens(value: Any, tokens: set[str]) -> None:
+    if isinstance(value, str):
+        tokens.update(t.lower() for t in _TOKEN_RE.findall(value))
+    elif isinstance(value, dict):
+        for v in value.values():
+            _collect_tokens(v, tokens)
+    elif isinstance(value, list):
+        for v in value:
+            _collect_tokens(v, tokens)
+
+
+def validate_pdf_tokens(
+    text: str, facts: dict[str, Any], *, posting_title: str = ""
+) -> list[str]:
+    """Every word/number token in the rendered PDF must trace back to
+    facts.yaml, the posting's own title (mirrored verbatim in the
+    headline -- not a fact but not invented either), or the template's
+    own static section headers. Anything else means the pipeline wrote
+    something not grounded in either source."""
+    allowed: set[str] = set(_STRUCTURAL_TOKENS)
+    _collect_tokens(facts, allowed)
+    allowed.update(t.lower() for t in _TOKEN_RE.findall(posting_title))
+
+    pdf_tokens = {t.lower() for t in _TOKEN_RE.findall(text)}
+    unknown = sorted(pdf_tokens - allowed)
+    return [f"token {t!r} not traceable to facts.yaml or the posting title" for t in unknown]
+
+
 def check_ats(
     pdf_path: Path | str, content: dict[str, Any], *, required_terms: list[str] | None = None
 ) -> AtsCheckResult:
@@ -124,6 +180,7 @@ def check_ats(
     problems += _check_links(uris, content)
     problems += _check_section_order(text)
     problems += _check_no_garbled_text(text)
+    problems += _check_no_split_words(text)
     if required_terms:
         problems += _check_required_terms(text, required_terms)
 

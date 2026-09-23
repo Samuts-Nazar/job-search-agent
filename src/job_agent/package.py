@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from job_agent.cv.ats_checks import AtsCheckResult, check_ats
+from job_agent.cv.ats_checks import AtsCheckResult, check_ats, validate_pdf_tokens
 from job_agent.cv.content import build_cv_content, validate_cv_content
 from job_agent.cv.render import RenderError, render_cv
 from job_agent.outreach import build_people_search_url
@@ -71,8 +71,12 @@ def build_package(
     posting_tech_tags: list[dict[str, str]] | None,
     output_path: Path | str,
 ) -> Package:
-    """Raises PackageError if content validation (§8.5) fails, or
-    RenderError if the Typst compile fails."""
+    """Raises PackageError if content validation (§8.5) fails, the
+    rendered PDF fails its ATS text-layer checks, or the PDF text
+    contains a token not traceable to facts.yaml/the posting title
+    (§5.6 step 3's "assert... no missing text", checked end to end, not
+    just at the content-dict level). Raises RenderError if the Typst
+    compile itself fails."""
     content = build_cv_content(
         facts,
         track_id=track_id,
@@ -86,6 +90,12 @@ def build_package(
 
     pdf_path = render_cv(content, output_path)
     ats_result = check_ats(pdf_path, content)
+    token_problems = validate_pdf_tokens(
+        ats_result.extracted_text, facts, posting_title=posting_title
+    )
+    if not ats_result.ok or token_problems:
+        all_problems = ats_result.problems + token_problems
+        raise PackageError("ATS check failed: " + "; ".join(all_problems))
 
     outreach_url = build_people_search_url(company) if company else ""
     outreach_message = build_outreach_message(facts, posting_title=posting_title, company=company)

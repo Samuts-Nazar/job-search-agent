@@ -7,6 +7,9 @@
 // https://typst.app/docs on 2026-09-16 for the installed typst 0.15.1:
 // json(path) reads a file directly; #sys.inputs.<key> is always a string;
 // #set text(ligatures: false) disables the OpenType liga/clig features.
+// kerning: false verified live 2026-09-24 (real end-to-end pipeline check):
+// without it, DejaVu Sans's kerning after a capital "T" makes pypdf's text
+// extraction insert a stray space ("T elegram", "DevT ools").
 //
 // No tables, columns, icons, photo, date of birth, or street address.
 // Single column, A4, contact info as text links in the body (not a
@@ -15,7 +18,12 @@
 #let data = json(sys.inputs.data_path)
 
 #set page(paper: "a4", margin: 2cm)
-#set text(font: "DejaVu Sans", size: 10.5pt, ligatures: false, lang: "en")
+// kerning: false is required, not just ligatures: false -- verified live
+// 2026-09-24: DejaVu Sans's default kerning after a capital "T" (e.g.
+// "Telegram", "Took", "DevTools") produces a glyph gap pypdf's text
+// extraction misreads as a word space ("T elegram", "DevT ools"), which
+// would silently break ATS keyword matching on submitted applications.
+#set text(font: "DejaVu Sans", size: 10.5pt, ligatures: false, kerning: false, lang: "en")
 #set par(justify: false, leading: 0.65em)
 #set heading(numbering: none)
 #show heading: set text(size: 12pt, weight: "bold")
