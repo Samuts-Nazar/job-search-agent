@@ -14,6 +14,30 @@ from job_agent import db
 def format_extended_stats(conn: sqlite3.Connection) -> str:
     lines = ["", "Extended stats:", ""]
 
+    lines.append("Application funnel (from postings.status; cumulative per stage):")
+    funnel = db.application_funnel(conn)
+    for stage in db.FUNNEL_STAGES:
+        lines.append(f"  {stage}: {funnel[stage]}")
+    lines.append("  Conversion:")
+    for step, (reached, prior) in db.funnel_conversion_rates(funnel).items():
+        pct = f"{reached / prior:.0%}" if prior else "0%"
+        lines.append(f"    {step}: {pct} ({reached}/{prior})")
+    lines.append("  Outcome breakdown (of replied):")
+    status_totals = db.status_counts(conn)
+    for status in ("replied", "rejected", "interview"):
+        lines.append(f"    {status}: {status_totals.get(status, 0)}")
+    lines.append("")
+
+    for dimension in ("cv_track", "source"):
+        lines.append(f"Funnel reply rate by {dimension} (from postings.status):")
+        funnel_rates = db.funnel_reply_rate_by(conn, dimension)
+        if not funnel_rates:
+            lines.append("  (no submitted postings yet)")
+        for group, (replied, total) in sorted(funnel_rates.items()):
+            pct = f"{replied / total:.0%}" if total else "0%"
+            lines.append(f"  {group}: {pct} ({replied}/{total})")
+        lines.append("")
+
     lines.append("Postings rejected by the category allowlist, per source:")
     category_rejects = db.category_not_allowed_counts_by_source(conn)
     if not category_rejects:

@@ -30,9 +30,34 @@ def test_format_extended_stats_on_empty_db(conn):
     assert "no runs recorded yet" in text
     assert "no scored postings yet" in text
     assert "no submitted applications yet" in text
+    assert "no submitted postings yet" in text
     assert "no salary data with a known currency+period yet" in text
     assert "no replies recorded yet" in text
     assert "no tech_tags data yet" in text
+    assert "scored: 0" in text
+    assert "package_ready: 0" in text
+
+
+def test_format_extended_stats_application_funnel(conn):
+    id1 = db.insert_posting(conn, make_posting())
+    id2 = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    db.update_posting_status(
+        conn, id1, "scored", recommended_cv_track="qa_automation", fit_score=80
+    )
+    db.update_posting_status(
+        conn, id2, "replied", recommended_cv_track="qa_automation", fit_score=70
+    )
+
+    text = format_extended_stats(conn)
+
+    assert "scored: 2" in text
+    assert "package_ready: 1" in text
+    assert "submitted: 1" in text
+    assert "replied: 1" in text
+    assert "replied: 1" in text  # outcome breakdown line
+    assert "qa_automation: 100% (1/1)" in text
 
 
 def test_format_extended_stats_shows_counts_alongside_percentages(conn):

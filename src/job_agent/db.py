@@ -698,6 +698,91 @@ def reply_rate_by(
     return {(row["grp"] or "unknown"): (row["replied"], row["total"]) for row in rows}
 
 
+# --- Application funnel (postings.status) ---------------------------------
+#
+# reply_rate_by() above reads the applications table, which nothing
+# currently writes to (Phase 3's form-fill/submit flow doesn't exist yet).
+# The funnel below reads postings.status instead -- the column /mark and
+# the package flow actually set today -- so it reflects real data now
+# rather than a schema that's still empty.
+
+FUNNEL_STAGES = ["scored", "package_ready", "submitted", "replied"]
+
+# A posting's CURRENT status implies every earlier funnel stage was also
+# reached, even though the column no longer says so (there's no separate
+# per-posting status-history table). rejected/interview both count toward
+# "replied" -- both mean the employer responded, just with a different
+# outcome. form_filled counts toward "package_ready" (it comes after it in
+# the lifecycle); "manual" and "skipped" postings are excluded from the
+# funnel entirely -- their relationship to these stages isn't well-defined.
+_FUNNEL_REACHED_STATUSES: dict[str, set[str]] = {
+    "scored": {
+        "scored",
+        "package_ready",
+        "form_filled",
+        "submitted",
+        "replied",
+        "rejected",
+        "interview",
+    },
+    "package_ready": {
+        "package_ready",
+        "form_filled",
+        "submitted",
+        "replied",
+        "rejected",
+        "interview",
+    },
+    "submitted": {"submitted", "replied", "rejected", "interview"},
+    "replied": {"replied", "rejected", "interview"},
+}
+
+REPLY_OUTCOME_STATUSES = ["replied", "rejected", "interview"]
+
+
+def application_funnel(conn: sqlite3.Connection) -> dict[str, int]:
+    """{stage: count} for FUNNEL_STAGES, each a cumulative "reached at
+    least this stage" count based on postings.status."""
+    counts = status_counts(conn)
+    return {
+        stage: sum(counts.get(status, 0) for status in reached)
+        for stage, reached in _FUNNEL_REACHED_STATUSES.items()
+    }
+
+
+def funnel_conversion_rates(funnel: dict[str, int]) -> dict[str, tuple[int, int]]:
+    """{"stage_a -> stage_b": (count_b, count_a)} for each consecutive pair
+    in FUNNEL_STAGES, so the caller can render both the percentage and the
+    underlying counts."""
+    rates = {}
+    for prev_stage, stage in zip(FUNNEL_STAGES, FUNNEL_STAGES[1:], strict=False):
+        rates[f"{prev_stage} -> {stage}"] = (funnel[stage], funnel[prev_stage])
+    return rates
+
+
+def funnel_reply_rate_by(
+    conn: sqlite3.Connection, dimension: Literal["cv_track", "source"]
+) -> dict[str, tuple[int, int]]:
+    """Returns {group: (replied_count, submitted_count)} from
+    postings.status directly (see the module note above) -- replied_count
+    includes rejected/interview, both of which mean the employer
+    responded."""
+    column = "recommended_cv_track" if dimension == "cv_track" else "source"
+    placeholders = ", ".join("?" for _ in REPLY_OUTCOME_STATUSES)
+    rows = conn.execute(
+        f"""
+        SELECT {column} AS grp,
+               SUM(CASE WHEN status IN ({placeholders}) THEN 1 ELSE 0 END) AS replied,
+               COUNT(*) AS total
+        FROM postings
+        WHERE status IN ('submitted', {placeholders})
+        GROUP BY {column}
+        """,
+        (*REPLY_OUTCOME_STATUSES, *REPLY_OUTCOME_STATUSES),
+    ).fetchall()
+    return {(row["grp"] or "unknown"): (row["replied"], row["total"]) for row in rows}
+
+
 def _midpoint_salary(row: sqlite3.Row) -> float | None:
     if row["salary_min"] is not None and row["salary_max"] is not None:
         return (row["salary_min"] + row["salary_max"]) / 2

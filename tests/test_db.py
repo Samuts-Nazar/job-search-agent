@@ -592,3 +592,74 @@ def test_portfolio_expectation_stats(conn):
     assert stats["github"] == (2, 3)
     assert stats["unstated"] == (1, 3)
     assert stats["portfolio"] == (0, 3)
+
+
+def _insert_at_status(conn, status, **overrides):
+    posting = make_posting(**overrides)
+    posting_id = db.insert_posting(conn, posting)
+    db.update_posting_status(conn, posting_id, status)
+    return posting_id
+
+
+def test_application_funnel_all_zero_on_empty_db(conn):
+    assert db.application_funnel(conn) == {
+        "scored": 0,
+        "package_ready": 0,
+        "submitted": 0,
+        "replied": 0,
+    }
+
+
+def test_application_funnel_counts_cumulative(conn):
+    _insert_at_status(conn, "scored", canonical_url="https://a/1", dedup_hash="h1")
+    _insert_at_status(conn, "package_ready", canonical_url="https://a/2", dedup_hash="h2")
+    _insert_at_status(conn, "submitted", canonical_url="https://a/3", dedup_hash="h3")
+    _insert_at_status(conn, "replied", canonical_url="https://a/4", dedup_hash="h4")
+    _insert_at_status(conn, "rejected", canonical_url="https://a/5", dedup_hash="h5")
+    _insert_at_status(conn, "interview", canonical_url="https://a/6", dedup_hash="h6")
+    _insert_at_status(conn, "filtered_out", canonical_url="https://a/7", dedup_hash="h7")
+
+    funnel = db.application_funnel(conn)
+
+    # every one of the 6 non-filtered postings reached "scored" (even the
+    # ones now further along, since their current status implies it)
+    assert funnel["scored"] == 6
+    assert funnel["package_ready"] == 5  # everyone from package_ready onward
+    assert funnel["submitted"] == 4  # submitted, replied, rejected, interview
+    assert funnel["replied"] == 3  # replied, rejected, interview all count
+
+
+def test_funnel_conversion_rates():
+    funnel = {"scored": 10, "package_ready": 5, "submitted": 4, "replied": 2}
+    rates = db.funnel_conversion_rates(funnel)
+    assert rates["scored -> package_ready"] == (5, 10)
+    assert rates["package_ready -> submitted"] == (4, 5)
+    assert rates["submitted -> replied"] == (2, 4)
+
+
+def test_funnel_reply_rate_by_cv_track(conn):
+    id1 = _insert_at_status(conn, "submitted", canonical_url="https://a/1", dedup_hash="h1")
+    id2 = _insert_at_status(conn, "replied", canonical_url="https://a/2", dedup_hash="h2")
+    id3 = _insert_at_status(conn, "rejected", canonical_url="https://a/3", dedup_hash="h3")
+    db.update_posting_status(conn, id1, "submitted", recommended_cv_track="qa_automation")
+    db.update_posting_status(conn, id2, "replied", recommended_cv_track="qa_automation")
+    db.update_posting_status(conn, id3, "rejected", recommended_cv_track="manual_qa")
+
+    rates = db.funnel_reply_rate_by(conn, "cv_track")
+
+    assert rates["qa_automation"] == (1, 2)  # 1 replied out of 2 submitted-or-later
+    assert rates["manual_qa"] == (1, 1)  # rejected counts as a reply
+
+
+def test_funnel_reply_rate_by_source(conn):
+    _insert_at_status(
+        conn, "submitted", source="dou", canonical_url="https://a/1", dedup_hash="h1"
+    )
+    _insert_at_status(
+        conn, "interview", source="djinni", canonical_url="https://a/2", dedup_hash="h2"
+    )
+
+    rates = db.funnel_reply_rate_by(conn, "source")
+
+    assert rates["dou"] == (0, 1)
+    assert rates["djinni"] == (1, 1)
