@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest
@@ -136,19 +137,37 @@ def test_mark_posting_updates_status(conn):
     assert row["status"] == "interview"
 
 
-def _get_handler(router, name):
-    for handler in router.message.handlers:
+def _get_handler(router, name, observer_name="message"):
+    observer = getattr(router, observer_name)
+    for handler in observer.handlers:
         if handler.callback.__name__ == name:
             return handler.callback
-    raise AssertionError(f"no handler named {name!r}")
+    raise AssertionError(f"no handler named {name!r} on router.{observer_name}")
 
 
 @dataclass
 class _FakeMessage:
     answered: list = field(default_factory=list)
+    documents: list = field(default_factory=list)
+    markup_cleared: bool = False
 
     async def answer(self, text, reply_markup=None):
         self.answered.append(text)
+
+    async def answer_document(self, document, caption=None, reply_markup=None):
+        self.documents.append((document, caption))
+
+    async def edit_reply_markup(self, reply_markup=None):
+        self.markup_cleared = True
+
+
+@dataclass
+class _FakeCallbackQuery:
+    message: _FakeMessage
+    answered: list = field(default_factory=list)
+
+    async def answer(self, text=None, show_alert=False):
+        self.answered.append((text, show_alert))
 
 
 async def test_run_command_calls_on_run_and_acks(conn):
@@ -175,6 +194,116 @@ async def test_run_command_without_on_run_just_acks(conn):
     await handle_run(message)  # must not raise with on_run=None
 
     assert message.answered == ["Triggering a pipeline run."]
+
+
+def _fake_package(pdf_path="output/packages/fake.pdf"):
+    from job_agent.cv.ats_checks import AtsCheckResult
+    from job_agent.package import Package
+
+    return Package(
+        pdf_path=Path(pdf_path),
+        outreach_url="https://www.linkedin.com/search/results/people/?keywords=Acme",
+        outreach_message="Hi! Draft outreach message.",
+        ats_result=AtsCheckResult(ok=True),
+        content={},
+    )
+
+
+async def test_prepare_without_facts_data_declines(conn):
+    posting_id = insert_scored_posting(conn)
+    router = telegram_bot.build_router(conn, 40, facts_data=None)
+    handle_prepare = _get_handler(router, "handle_prepare", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_prepare(query, telegram_bot.PostingAction(action="prepare", posting_id=posting_id))
+
+    assert query.answered[0][1] is True  # show_alert
+    assert message.documents == []
+
+
+async def test_prepare_builds_and_sends_package(conn, monkeypatch):
+    posting_id = insert_scored_posting(conn)
+    pkg = _fake_package()
+    monkeypatch.setattr(telegram_bot.package, "build_package", lambda *a, **k: pkg)
+
+    router = telegram_bot.build_router(conn, 40, facts_data={"candidate": {"name": "X"}})
+    handle_prepare = _get_handler(router, "handle_prepare", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_prepare(query, telegram_bot.PostingAction(action="prepare", posting_id=posting_id))
+
+    assert len(message.documents) == 1
+    assert any("LinkedIn search" in text for text in message.answered)
+    assert any("Cover letter not included" in text for text in message.answered)
+    row = db.get_posting(conn, posting_id)
+    assert row["status"] == "package_ready"
+
+
+async def test_prepare_reports_package_error_without_changing_status(conn, monkeypatch):
+    posting_id = insert_scored_posting(conn)
+
+    def fake_build_package(*a, **k):
+        raise telegram_bot.package.PackageError("skill not in facts.yaml")
+
+    monkeypatch.setattr(telegram_bot.package, "build_package", fake_build_package)
+
+    router = telegram_bot.build_router(conn, 40, facts_data={"candidate": {"name": "X"}})
+    handle_prepare = _get_handler(router, "handle_prepare", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_prepare(query, telegram_bot.PostingAction(action="prepare", posting_id=posting_id))
+
+    assert message.documents == []
+    assert any("Package preparation failed" in text for text in message.answered)
+    row = db.get_posting(conn, posting_id)
+    assert row["status"] == "scored"
+
+
+async def test_package_approve_acknowledges(conn):
+    posting_id = insert_scored_posting(conn)
+    router = telegram_bot.build_router(conn, 40)
+    handle_approve = _get_handler(router, "handle_package_approve", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_approve(query, telegram_bot.PackageAction(action="approve", posting_id=posting_id))
+
+    assert query.answered == [("Approved.", False)]
+    assert any("approved" in text.lower() for text in message.answered)
+
+
+async def test_package_regenerate_rebuilds_package(conn, monkeypatch):
+    posting_id = insert_scored_posting(conn)
+    pkg = _fake_package()
+    monkeypatch.setattr(telegram_bot.package, "build_package", lambda *a, **k: pkg)
+
+    router = telegram_bot.build_router(conn, 40, facts_data={"candidate": {"name": "X"}})
+    handle_regenerate = _get_handler(router, "handle_package_regenerate", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_regenerate(
+        query, telegram_bot.PackageAction(action="regenerate", posting_id=posting_id)
+    )
+
+    assert len(message.documents) == 1
+
+
+async def test_package_skip_marks_skipped_and_clears_markup(conn):
+    posting_id = insert_scored_posting(conn)
+    router = telegram_bot.build_router(conn, 40)
+    handle_skip = _get_handler(router, "handle_package_skip", "callback_query")
+    message = _FakeMessage()
+    query = _FakeCallbackQuery(message=message)
+
+    await handle_skip(query, telegram_bot.PackageAction(action="skip", posting_id=posting_id))
+
+    row = db.get_posting(conn, posting_id)
+    assert row["status"] == "skipped"
+    assert message.markup_cleared is True
 
 
 def test_skip_posting_updates_status(conn):

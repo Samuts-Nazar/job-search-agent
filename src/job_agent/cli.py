@@ -209,9 +209,18 @@ async def _send_digest(
         await bot.session.close()
 
 
-async def _poll(conn: sqlite3.Connection, secrets: Secrets, min_score: int) -> None:
+async def _poll(
+    conn: sqlite3.Connection,
+    secrets: Secrets,
+    min_score: int,
+    *,
+    facts_data: dict | None = None,
+    output_dir: Path = telegram_bot.DEFAULT_PACKAGE_OUTPUT_DIR,
+) -> None:
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
-    dispatcher = telegram_bot.build_dispatcher(conn, min_score)
+    dispatcher = telegram_bot.build_dispatcher(
+        conn, min_score, facts_data=facts_data, output_dir=output_dir
+    )
     try:
         await dispatcher.start_polling(bot)
     finally:
@@ -276,6 +285,8 @@ async def _telegram_process(
     offset_path: Path,
     alert_flag_path: Path,
     stale_threshold_hours: float,
+    facts_data: dict | None,
+    output_dir: Path,
 ) -> int:
     """One-shot: process whatever Telegram updates are waiting, persist the
     new offset, then check the secondary stale-pipeline signal. Returns
@@ -283,7 +294,11 @@ async def _telegram_process(
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
     try:
         dispatcher = telegram_bot.build_dispatcher(
-            conn, config.telegram.min_score, on_run=_trigger_pipeline_workflow
+            conn,
+            config.telegram.min_score,
+            on_run=_trigger_pipeline_workflow,
+            facts_data=facts_data,
+            output_dir=output_dir,
         )
         offset = _read_offset(offset_path)
         processed, new_offset = await telegram_bot.process_pending_updates(
@@ -368,7 +383,10 @@ def main(
                     "Pipeline run complete. Listening for Telegram interaction "
                     "(Ctrl+C to stop)..."
                 )
-                asyncio.run(_poll(conn, secrets, config.telegram.min_score))
+                facts_data = facts.load_facts(facts_path)
+                asyncio.run(
+                    _poll(conn, secrets, config.telegram.min_score, facts_data=facts_data)
+                )
     except KeyboardInterrupt:
         typer.echo("Shutting down.")
     except FileNotFoundError as exc:
@@ -659,6 +677,10 @@ def telegram_process(
     config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
     env_path: str = typer.Option(DEFAULT_ENV_PATH, "--env"),
     db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+    facts_path: str = typer.Option(data_guard.FACTS_PATH, "--facts"),
+    output_dir: str = typer.Option(
+        str(telegram_bot.DEFAULT_PACKAGE_OUTPUT_DIR), "--output-dir"
+    ),
     offset_path: str = typer.Option(DEFAULT_OFFSET_PATH, "--offset-file"),
     alert_flag_path: str = typer.Option(DEFAULT_ALERT_FLAG_PATH, "--alert-flag-file"),
     stale_threshold_hours: float = typer.Option(
@@ -668,9 +690,9 @@ def telegram_process(
     """Process whatever Telegram updates are waiting right now, once, and
     exit -- for a scheduled process (e.g. a GitHub Actions workflow run
     every 15 min) instead of `job`'s local infinite start_polling() loop.
-    Same /pending, /stats, /mark, and button handlers either way; only the
-    update-delivery mechanism differs. Also runs the secondary (in-Actions)
-    stale-pipeline check -- see job_agent/deadman.py.
+    Same /pending, /stats, /mark, button, and package handlers either way;
+    only the update-delivery mechanism differs. Also runs the secondary
+    (in-Actions) stale-pipeline check -- see job_agent/deadman.py.
     """
     try:
         config = load_config(config_path)
@@ -681,6 +703,11 @@ def telegram_process(
     except ValidationError as exc:
         _echo_error(exc, prefix=f"Missing or invalid secrets in {env_path}: ")
         raise typer.Exit(code=1) from exc
+
+    try:
+        facts_data = facts.load_facts(facts_path)
+    except FileNotFoundError:
+        facts_data = None  # /pending, /stats, /mark still work; package prep declines
 
     conn = db.connect(db_path)
     db.init_db(conn)
@@ -693,6 +720,8 @@ def telegram_process(
                 offset_path=Path(offset_path),
                 alert_flag_path=Path(alert_flag_path),
                 stale_threshold_hours=stale_threshold_hours,
+                facts_data=facts_data,
+                output_dir=Path(output_dir),
             )
         )
     finally:

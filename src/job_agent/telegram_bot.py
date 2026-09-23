@@ -1,12 +1,13 @@
-"""Telegram bot: run digest, per-posting cards, /pending, /stats, /mark.
+"""Telegram bot: run digest, per-posting cards, /pending, /stats, /mark,
+package assembly and approval.
 
-See PROJECT.md §5.5, §5.8, §2. Verified live against the installed
+See PROJECT.md §5.5, §5.6, §5.8, §2. Verified live against the installed
 aiogram==3.31.0: Bot/Dispatcher/Router are async; CallbackData is a
 Pydantic model requiring a `prefix` class kwarg, with `.pack()`/`.filter()`
 for encoding/matching callback_data.
 
-"Prepare package" acknowledges the button press but package building itself
-is Phase 2 (§5.6) and not implemented yet.
+Cover-letter generation (§5.6 step 4) is intentionally not part of the
+package sent here -- on hold pending a model choice; see package.py.
 """
 
 from __future__ import annotations
@@ -14,6 +15,8 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Any
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -21,15 +24,27 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.filters.callback_data import CallbackData
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
-from job_agent import db
+from job_agent import db, package
 
 MANUAL_STATUSES = {"replied", "rejected", "interview"}
+DEFAULT_PACKAGE_OUTPUT_DIR = Path("output/packages")
 
 
 class PostingAction(CallbackData, prefix="posting"):
     action: str  # "prepare" | "skip"
+    posting_id: int
+
+
+class PackageAction(CallbackData, prefix="package"):
+    action: str  # "approve" | "regenerate" | "skip"
     posting_id: int
 
 
@@ -146,11 +161,72 @@ def get_pending_rows(conn: sqlite3.Connection, min_score: int) -> list[sqlite3.R
     ]
 
 
+def _package_keyboard(posting_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Approve",
+                    callback_data=PackageAction(action="approve", posting_id=posting_id).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Regenerate",
+                    callback_data=PackageAction(action="regenerate", posting_id=posting_id).pack(),
+                ),
+                InlineKeyboardButton(
+                    text="Skip",
+                    callback_data=PackageAction(action="skip", posting_id=posting_id).pack(),
+                ),
+            ]
+        ]
+    )
+
+
+async def _assemble_and_send_package(
+    message: Message,
+    conn: sqlite3.Connection,
+    facts_data: dict[str, Any],
+    output_dir: Path,
+    posting_id: int,
+) -> None:
+    row = db.get_posting(conn, posting_id)
+    if row is None:
+        await message.answer(f"No posting with id {posting_id}.")
+        return
+
+    try:
+        pkg = package.build_package(
+            facts_data,
+            track_id=row["recommended_cv_track"] or "",
+            posting_title=row["title"],
+            company=row["company"] or "",
+            description=row["description"],
+            posting_tech_tags=json.loads(row["tech_tags"] or "[]"),
+            output_path=output_dir / f"{posting_id}.pdf",
+        )
+    except (package.PackageError, package.RenderError) as exc:
+        await message.answer(f"Package preparation failed: {exc}")
+        return
+
+    db.update_posting_status(conn, posting_id, "package_ready")
+
+    await message.answer_document(
+        FSInputFile(pkg.pdf_path), caption=f"CV -- {row['title']} (id {posting_id})"
+    )
+    outreach_text = (
+        f"LinkedIn search: {pkg.outreach_url}\n\nDraft message:\n{pkg.outreach_message}\n\n"
+        "(Cover letter not included yet -- on hold pending a model choice.)"
+    )
+    await message.answer(outreach_text, reply_markup=_package_keyboard(posting_id))
+
+
 def build_router(
     conn: sqlite3.Connection,
     min_score: int,
     *,
     on_run: Callable[[], Awaitable[None]] | None = None,
+    facts_data: dict[str, Any] | None = None,
+    output_dir: Path = DEFAULT_PACKAGE_OUTPUT_DIR,
 ) -> Router:
     router = Router()
 
@@ -197,7 +273,46 @@ def build_router(
 
     @router.callback_query(PostingAction.filter(F.action == "prepare"))
     async def handle_prepare(query: CallbackQuery, callback_data: PostingAction) -> None:
-        await query.answer("Package preparation isn't built yet (Phase 2).", show_alert=True)
+        if facts_data is None:
+            await query.answer(
+                "Package preparation needs facts.yaml, not available in this run.",
+                show_alert=True,
+            )
+            return
+        await query.answer("Preparing package...")
+        if query.message:
+            await _assemble_and_send_package(
+                query.message, conn, facts_data, output_dir, callback_data.posting_id
+            )
+
+    @router.callback_query(PackageAction.filter(F.action == "approve"))
+    async def handle_package_approve(query: CallbackQuery, callback_data: PackageAction) -> None:
+        await query.answer("Approved.")
+        if query.message:
+            await query.message.answer(
+                "Package approved. Form-filling and submission aren't built yet (Phase 3)."
+            )
+
+    @router.callback_query(PackageAction.filter(F.action == "regenerate"))
+    async def handle_package_regenerate(query: CallbackQuery, callback_data: PackageAction) -> None:
+        if facts_data is None:
+            await query.answer(
+                "Package preparation needs facts.yaml, not available in this run.",
+                show_alert=True,
+            )
+            return
+        await query.answer("Regenerating...")
+        if query.message:
+            await _assemble_and_send_package(
+                query.message, conn, facts_data, output_dir, callback_data.posting_id
+            )
+
+    @router.callback_query(PackageAction.filter(F.action == "skip"))
+    async def handle_package_skip(query: CallbackQuery, callback_data: PackageAction) -> None:
+        skip_posting(conn, callback_data.posting_id)
+        await query.answer("Skipped.")
+        if query.message:
+            await query.message.edit_reply_markup(reply_markup=None)
 
     return router
 
@@ -261,9 +376,15 @@ def build_dispatcher(
     min_score: int,
     *,
     on_run: Callable[[], Awaitable[None]] | None = None,
+    facts_data: dict[str, Any] | None = None,
+    output_dir: Path = DEFAULT_PACKAGE_OUTPUT_DIR,
 ) -> Dispatcher:
     dispatcher = Dispatcher()
-    dispatcher.include_router(build_router(conn, min_score, on_run=on_run))
+    dispatcher.include_router(
+        build_router(
+            conn, min_score, on_run=on_run, facts_data=facts_data, output_dir=output_dir
+        )
+    )
     return dispatcher
 
 
