@@ -11,6 +11,7 @@ from job_agent.config import (
     FallbacksConfig,
     LinkedinSourceConfig,
     ModelsConfig,
+    Secrets,
     SourcesConfig,
     ThresholdConfig,
 )
@@ -991,3 +992,158 @@ def test_doctor_command_passes_when_every_check_is_ok(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "checks passed" in result.output
     assert "[FAILED]" not in result.output
+
+
+async def test_send_digest_sends_budget_alert_when_present(monkeypatch, tmp_path):
+    conn = db.connect(tmp_path / "jobs.db")
+    db.init_db(conn)
+
+    sent_messages = []
+
+    class FakeBot:
+        def __init__(self):
+            self.session = self
+
+        async def close(self):
+            pass
+
+        async def send_message(self, chat_id, text):
+            sent_messages.append((chat_id, text))
+
+    fake_bot = FakeBot()
+    monkeypatch.setattr(cli.telegram_bot, "build_bot", lambda token: fake_bot)
+
+    async def fake_send_digest_and_cards(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(cli.telegram_bot, "send_digest_and_cards", fake_send_digest_and_cards)
+
+    secrets = Secrets(
+        openrouter_api_key="x", telegram_bot_token="x", telegram_chat_id="chat-1"
+    )
+
+    await cli._send_digest(secrets, conn, {}, [], 40, [], "Monthly LLM spend $9.00 ...")
+
+    assert sent_messages == [("chat-1", "Monthly LLM spend $9.00 ...")]
+    conn.close()
+
+
+async def test_send_digest_sends_nothing_extra_when_no_budget_alert(monkeypatch, tmp_path):
+    conn = db.connect(tmp_path / "jobs.db")
+    db.init_db(conn)
+
+    sent_messages = []
+
+    class FakeBot:
+        def __init__(self):
+            self.session = self
+
+        async def close(self):
+            pass
+
+        async def send_message(self, chat_id, text):
+            sent_messages.append((chat_id, text))
+
+    fake_bot = FakeBot()
+    monkeypatch.setattr(cli.telegram_bot, "build_bot", lambda token: fake_bot)
+
+    async def fake_send_digest_and_cards(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(cli.telegram_bot, "send_digest_and_cards", fake_send_digest_and_cards)
+
+    secrets = Secrets(
+        openrouter_api_key="x", telegram_bot_token="x", telegram_chat_id="chat-1"
+    )
+
+    await cli._send_digest(secrets, conn, {}, [], 40)
+
+    assert sent_messages == []
+    conn.close()
+
+
+def test_main_passes_budget_alert_to_send_digest(monkeypatch, tmp_path):
+    config_path, env_path, db_path = _prepare_main_invocation(monkeypatch, tmp_path)
+
+    captured = []
+
+    async def fake_send_digest(*args, **kwargs):
+        captured.append(args)
+
+    monkeypatch.setattr(cli, "_send_digest", fake_send_digest)
+    monkeypatch.setattr(cli, "_poll", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli.budget, "check_budget_threshold", lambda conn, **kwargs: "budget cap approached"
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+            "--db",
+            str(db_path),
+            "--no-poll",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured[0][-1] == "budget cap approached"
+
+
+async def test_telegram_process_sends_budget_alert(monkeypatch, tmp_path):
+    conn = db.connect(tmp_path / "jobs.db")
+    db.init_db(conn)
+
+    sent_messages = []
+
+    class FakeBot:
+        def __init__(self):
+            self.session = self
+
+        async def close(self):
+            pass
+
+        async def send_message(self, chat_id, text):
+            sent_messages.append((chat_id, text))
+
+    fake_bot = FakeBot()
+    monkeypatch.setattr(cli.telegram_bot, "build_bot", lambda token: fake_bot)
+    monkeypatch.setattr(cli.telegram_bot, "build_dispatcher", lambda *a, **k: object())
+
+    async def fake_process_pending_updates(bot, dispatcher, *, offset):
+        return 0, None
+
+    monkeypatch.setattr(cli.telegram_bot, "process_pending_updates", fake_process_pending_updates)
+    monkeypatch.setattr(cli.deadman, "check_pipeline_staleness", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli.budget, "check_budget_threshold", lambda *a, **k: "budget cap approached"
+    )
+
+    secrets = Secrets(
+        openrouter_api_key="x", telegram_bot_token="x", telegram_chat_id="chat-1"
+    )
+    config = Config(
+        thresholds={"wide": ThresholdConfig(fit_score_min=40)},
+        models=ModelsConfig(
+            bulk="test/bulk", quality="test/quality", fallbacks=FallbacksConfig()
+        ),
+        sources=SourcesConfig(),
+    )
+
+    await cli._telegram_process(
+        conn,
+        secrets,
+        config,
+        offset_path=tmp_path / "offset.txt",
+        alert_flag_path=tmp_path / "stale.flag",
+        stale_threshold_hours=36.0,
+        facts_data=None,
+        output_dir=tmp_path / "packages",
+        budget_alert_flag_path=tmp_path / "budget.flag",
+    )
+
+    assert sent_messages == [("chat-1", "budget cap approached")]
+    conn.close()

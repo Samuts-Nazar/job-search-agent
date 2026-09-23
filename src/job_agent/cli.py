@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from job_agent import (
     ats_vendor,
+    budget,
     data_guard,
     db,
     deadman,
@@ -44,6 +45,7 @@ DEFAULT_DB_PATH = "data/jobs.db"
 DEFAULT_ENV_PATH = ".env"
 DEFAULT_OFFSET_PATH = "data/telegram_offset.txt"
 DEFAULT_ALERT_FLAG_PATH = "data/telegram_stale_alert.flag"
+DEFAULT_BUDGET_ALERT_FLAG_PATH = "data/budget_alert.flag"
 
 # Set by the GitHub Actions workflows (never locally): public-repo Actions
 # logs are world-readable, so under JOB_CI=1 an exception's own message --
@@ -194,6 +196,7 @@ async def _send_digest(
     scored_rows: list[sqlite3.Row],
     fit_score_min: int,
     failed_sources: list[str] | None = None,
+    budget_alert: str | None = None,
 ) -> None:
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
     try:
@@ -206,6 +209,8 @@ async def _send_digest(
             fit_score_min=fit_score_min,
             failed_sources=failed_sources,
         )
+        if budget_alert is not None:
+            await bot.send_message(secrets.telegram_chat_id, budget_alert)
     finally:
         await bot.session.close()
 
@@ -293,10 +298,11 @@ async def _telegram_process(
     stale_threshold_hours: float,
     facts_data: dict | None,
     output_dir: Path,
+    budget_alert_flag_path: Path = Path(DEFAULT_BUDGET_ALERT_FLAG_PATH),
 ) -> int:
     """One-shot: process whatever Telegram updates are waiting, persist the
-    new offset, then check the secondary stale-pipeline signal. Returns
-    the number of updates processed."""
+    new offset, then check the secondary stale-pipeline signal and the
+    monthly budget guard. Returns the number of updates processed."""
     bot = telegram_bot.build_bot(secrets.telegram_bot_token)
     try:
         dispatcher = telegram_bot.build_dispatcher(
@@ -319,6 +325,14 @@ async def _telegram_process(
         )
         if alert:
             await bot.send_message(secrets.telegram_chat_id, alert)
+
+        budget_alert = budget.check_budget_threshold(
+            conn,
+            monthly_usd_cap=config.budget.monthly_usd,
+            alert_flag_path=budget_alert_flag_path,
+        )
+        if budget_alert:
+            await bot.send_message(secrets.telegram_chat_id, budget_alert)
         return processed
     finally:
         await bot.session.close()
@@ -369,6 +383,11 @@ def main(
         scored_rows, source_counts_this_run, failed_sources = run_pipeline(
             config, secrets, conn, facts_path=facts_path
         )
+        budget_alert = budget.check_budget_threshold(
+            conn,
+            monthly_usd_cap=config.budget.monthly_usd,
+            alert_flag_path=Path(DEFAULT_BUDGET_ALERT_FLAG_PATH),
+        )
         if no_telegram:
             typer.echo("--no-telegram set: pipeline run complete, nothing sent.")
         else:
@@ -381,6 +400,7 @@ def main(
                     scored_rows,
                     config.telegram.min_score,
                     failed_sources,
+                    budget_alert,
                 )
             )
             if no_poll:
@@ -772,13 +792,17 @@ def telegram_process(
     stale_threshold_hours: float = typer.Option(
         deadman.DEFAULT_STALE_THRESHOLD_HOURS, "--stale-threshold-hours"
     ),
+    budget_alert_flag_path: str = typer.Option(
+        DEFAULT_BUDGET_ALERT_FLAG_PATH, "--budget-alert-flag-file"
+    ),
 ) -> None:
     """Process whatever Telegram updates are waiting right now, once, and
     exit -- for a scheduled process (e.g. a GitHub Actions workflow run
     every 15 min) instead of `job`'s local infinite start_polling() loop.
     Same /pending, /stats, /mark, button, and package handlers either way;
     only the update-delivery mechanism differs. Also runs the secondary
-    (in-Actions) stale-pipeline check -- see job_agent/deadman.py.
+    (in-Actions) stale-pipeline check (job_agent/deadman.py) and the
+    monthly budget guard (job_agent/budget.py).
     """
     try:
         config = load_config(config_path)
@@ -808,6 +832,7 @@ def telegram_process(
                 stale_threshold_hours=stale_threshold_hours,
                 facts_data=facts_data,
                 output_dir=Path(output_dir),
+                budget_alert_flag_path=Path(budget_alert_flag_path),
             )
         )
     finally:
