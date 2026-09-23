@@ -11,7 +11,7 @@ import sqlite3
 from job_agent import db
 
 
-def format_extended_stats(conn: sqlite3.Connection) -> str:
+def format_extended_stats(conn: sqlite3.Connection, *, fit_score_min: int) -> str:
     lines = ["", "Extended stats:", ""]
 
     lines.append("Application funnel (from postings.status; cumulative per stage):")
@@ -44,6 +44,15 @@ def format_extended_stats(conn: sqlite3.Connection) -> str:
         lines.append("  (none rejected on category yet)")
     for source, count in sorted(category_rejects.items(), key=lambda kv: -kv[1]):
         lines.append(f"  {source}: {count}")
+    lines.append("")
+
+    lines.append(f"ATS vendor breakdown, postings at/above fit_score {fit_score_min}:")
+    lines.append("  (job analyze --detect-ats fills this in -- not run automatically)")
+    ats_breakdown = db.ats_vendor_breakdown(conn, threshold=fit_score_min)
+    if not ats_breakdown:
+        lines.append("  (no postings above threshold yet)")
+    for vendor, count in sorted(ats_breakdown.items(), key=lambda kv: -kv[1]):
+        lines.append(f"  {vendor}: {count}")
     lines.append("")
 
     lines.append("Recent pipeline runs (most recent first):")

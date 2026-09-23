@@ -722,3 +722,34 @@ def test_schema_diff_reports_extra_columns_separately_from_missing(tmp_path):
 
     assert diffs["postings"] == (set(), {"legacy_field"})
     connection.close()
+
+
+def test_ats_vendor_breakdown(conn):
+    below_id = db.insert_posting(conn, make_posting())
+    checked_id = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/2/", dedup_hash="hash2")
+    )
+    none_id = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/3/", dedup_hash="hash3")
+    )
+    unchecked_id = db.insert_posting(
+        conn, make_posting(canonical_url="https://djinni.co/jobs/4/", dedup_hash="hash4")
+    )
+
+    db.update_posting_status(conn, below_id, "scored", fit_score=10)  # below threshold
+    db.update_posting_status(
+        conn,
+        checked_id,
+        "scored",
+        fit_score=80,
+        ats_vendor="greenhouse",
+        ats_checked_at="2026-09-23T00:00:00+00:00",
+    )
+    db.update_posting_status(
+        conn, none_id, "scored", fit_score=60, ats_checked_at="2026-09-23T00:00:00+00:00"
+    )
+    db.update_posting_status(conn, unchecked_id, "scored", fit_score=50)  # ats_checked_at NULL
+
+    breakdown = db.ats_vendor_breakdown(conn, threshold=40)
+
+    assert breakdown == {"greenhouse": 1, "none": 1, "not_checked": 1}

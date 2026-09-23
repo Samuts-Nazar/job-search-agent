@@ -1,6 +1,7 @@
 import json
 import shutil
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -807,6 +808,112 @@ def test_analyze_readmit_scores_newly_passing_and_leaves_the_rest_filtered(monke
     assert still_filtered_row["status"] == "filtered_out"
     assert still_filtered_row["filtered_reason"] == "seniority_stopword:principal"
     conn.close()
+
+
+def test_detect_ats_for_above_threshold_checks_only_unchecked_above_threshold(conn):
+    above_unchecked = _insert_stuck_posting(
+        conn, source="dou", url="https://jobs.dou.ua/companies/acme/vacancies/1/"
+    )
+    db.update_posting_status(conn, above_unchecked, "scored", fit_score=80)
+
+    below_threshold = _insert_stuck_posting(
+        conn, source="dou", url="https://jobs.dou.ua/companies/acme/vacancies/2/"
+    )
+    db.update_posting_status(conn, below_threshold, "scored", fit_score=10)
+
+    already_checked = _insert_stuck_posting(
+        conn, source="dou", url="https://jobs.dou.ua/companies/acme/vacancies/3/"
+    )
+    db.update_posting_status(
+        conn,
+        already_checked,
+        "scored",
+        fit_score=90,
+        ats_vendor="lever",
+        ats_checked_at="2026-09-23T00:00:00+00:00",
+    )
+
+    goto_page = (
+        '<a rel="nofollow" href="https://dou.ua/goto/vacancy/?id=1">Відгукнутися</a>'
+    )
+    requested = []
+
+    def handler(request):
+        requested.append(str(request.url))
+        if str(request.url) == "https://jobs.dou.ua/companies/acme/vacancies/1/":
+            return httpx.Response(200, text=goto_page)
+        if str(request.url) == "https://dou.ua/goto/vacancy/?id=1":
+            return httpx.Response(
+                302, headers={"location": "https://job-boards.eu.greenhouse.io/acme/jobs/1"}
+            )
+        if str(request.url) == "https://job-boards.eu.greenhouse.io/acme/jobs/1":
+            return httpx.Response(200, text="<html>job page</html>")
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    result = cli.detect_ats_for_above_threshold(conn, threshold=40, client=client)
+    client.close()
+
+    assert result == {"checked": 1, "detected": 1}
+    # only the above-threshold, not-yet-checked posting was ever requested
+    assert all("vacancies/1" in url or "goto" in url or "greenhouse" in url for url in requested)
+
+    row = db.get_posting(conn, above_unchecked)
+    assert row["ats_vendor"] == "greenhouse"
+    assert row["ats_checked_at"] is not None
+    assert row["status"] == "scored"  # status untouched
+
+    # below-threshold and already-checked postings were left alone
+    assert db.get_posting(conn, below_threshold)["ats_checked_at"] is None
+    assert db.get_posting(conn, already_checked)["ats_vendor"] == "lever"
+
+
+def test_analyze_detect_ats_command_wiring(monkeypatch, tmp_path):
+    db_path = tmp_path / "jobs.db"
+    conn = db.connect(db_path)
+    db.init_db(conn)
+    conn.close()
+
+    config_path = tmp_path / "config.yaml"
+    shutil.copy("config.example.yaml", config_path)
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "OPENROUTER_API_KEY=x\nTELEGRAM_BOT_TOKEN=x\nTELEGRAM_CHAT_ID=x\n", encoding="utf-8"
+    )
+
+    captured = {}
+
+    def fake_detect(conn_, *, threshold):
+        captured["threshold"] = threshold
+        return {"checked": 3, "detected": 2}
+
+    monkeypatch.setattr(cli, "detect_ats_for_above_threshold", fake_detect)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "analyze",
+            "--detect-ats",
+            "--db",
+            str(db_path),
+            "--config",
+            str(config_path),
+            "--env",
+            str(env_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["threshold"] == 40  # config.example.yaml's wide.fit_score_min
+    assert "Checked 3" in result.output
+    assert "found an external ATS for 2" in result.output
+
+
+def test_analyze_without_any_flag_mentions_detect_ats(tmp_path):
+    result = runner.invoke(cli.app, ["analyze", "--db", str(tmp_path / "jobs.db")])
+    assert result.exit_code == 1
+    assert "--detect-ats" in result.output
 
 
 def _prepare_main_invocation(monkeypatch, tmp_path):

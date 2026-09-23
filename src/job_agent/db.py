@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS postings (
     raw_tags TEXT,
     raw_payload TEXT,
     ats_vendor TEXT,
+    ats_checked_at TEXT,
     status TEXT NOT NULL DEFAULT 'new',
     filtered_reason TEXT,
     fit_score INTEGER,
@@ -482,6 +483,28 @@ def category_not_allowed_counts_by_source(conn: sqlite3.Connection) -> dict[str,
         "WHERE status = 'filtered_out' AND filtered_reason = 'category_not_allowed' GROUP BY source"
     ).fetchall()
     return {row["source"]: row["n"] for row in rows}
+
+
+def ats_vendor_breakdown(conn: sqlite3.Connection, *, threshold: int) -> dict[str, int]:
+    """{vendor_or_bucket: count} for every scored posting at/above
+    `threshold` fit_score -- see job_agent.ats_vendor.resolve_apply_
+    destination, which is what fills ats_vendor/ats_checked_at (`job
+    analyze --detect-ats`), not the main pipeline. "not_checked": detection
+    hasn't run against this posting yet (ats_checked_at IS NULL) -- e.g. it
+    just crossed the threshold and no one has run --detect-ats since.
+    "none": detection ran and found no external ATS (an internal apply
+    form, or a source resolve_apply_destination has no verified pattern
+    for yet)."""
+    rows = conn.execute(
+        "SELECT ats_vendor, ats_checked_at FROM postings "
+        "WHERE status = 'scored' AND fit_score >= ?",
+        (threshold,),
+    ).fetchall()
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = "not_checked" if row["ats_checked_at"] is None else (row["ats_vendor"] or "none")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 # --- Scoring runs ---------------------------------------------------------

@@ -520,8 +520,17 @@ def main(
 
 
 @app.command()
-def stats(db_path: str = typer.Option(DEFAULT_DB_PATH, "--db")) -> None:
+def stats(
+    db_path: str = typer.Option(DEFAULT_DB_PATH, "--db"),
+    config_path: str = typer.Option(DEFAULT_CONFIG_PATH, "--config"),
+) -> None:
     """Print pipeline/spend stats, plus extended aggregates (skills, reply rate, salary, etc.)."""
+    try:
+        config = load_config(config_path)
+        fit_score_min = config.active_threshold.fit_score_min
+    except FileNotFoundError:
+        fit_score_min = 40  # config.yaml missing -- fall back rather than refuse to report
+
     conn = db.connect(db_path)
     db.init_db(conn)
     try:
@@ -529,7 +538,7 @@ def stats(db_path: str = typer.Option(DEFAULT_DB_PATH, "--db")) -> None:
             db.status_counts(conn), db.source_counts(conn), db.total_cost_usd(conn)
         )
         typer.echo(text.replace("<b>", "").replace("</b>", ""))
-        typer.echo(stats_report.format_extended_stats(conn))
+        typer.echo(stats_report.format_extended_stats(conn, fit_score_min=fit_score_min))
     finally:
         conn.close()
 
@@ -782,6 +791,47 @@ def _readmit_newly_passing(
     return len(filtered_rows), len(admitted_rows), scored
 
 
+def detect_ats_for_above_threshold(
+    conn: sqlite3.Connection, *, threshold: int, client: httpx.Client | None = None
+) -> dict[str, int]:
+    """For every scored posting at/above `threshold` not yet checked
+    (ats_checked_at IS NULL), resolves its real apply destination (see
+    ats_vendor.resolve_apply_destination -- djinni/dou need a live fetch
+    since their own posting URL is never the real ATS) and stores the
+    result. Deliberately not part of the main `job` pipeline -- see
+    PROJECT.md §5.7: auto-fill itself stays deferred, this only gathers
+    the vendor counts that decision will be made from. Idempotent: a
+    posting already checked is skipped, so this is safe to run on a
+    schedule."""
+    owns_client = client is None
+    client = client or httpx.Client(
+        headers={"User-Agent": "Mozilla/5.0 (compatible; job-search-agent/0.1)"}
+    )
+    checked = 0
+    detected = 0
+    try:
+        rows = conn.execute(
+            "SELECT id, source, url, status FROM postings "
+            "WHERE status = 'scored' AND fit_score >= ? AND ats_checked_at IS NULL",
+            (threshold,),
+        ).fetchall()
+        for row in rows:
+            destination = ats_vendor.resolve_apply_destination(
+                client, source=row["source"], posting_url=row["url"]
+            )
+            vendor = ats_vendor.detect_ats_vendor(destination) if destination else None
+            db.update_posting_status(
+                conn, row["id"], row["status"], ats_vendor=vendor, ats_checked_at=db.now_iso()
+            )
+            checked += 1
+            if vendor is not None:
+                detected += 1
+    finally:
+        if owns_client:
+            client.close()
+    return {"checked": checked, "detected": detected}
+
+
 @app.command()
 def analyze(
     rescore: bool = typer.Option(False, "--rescore"),
@@ -790,6 +840,13 @@ def analyze(
         "--readmit",
         help="Re-check filtered-out postings against the current prefilter and "
         "score any that now pass, as primary results (e.g. after a prefilter fix).",
+    ),
+    detect_ats: bool = typer.Option(
+        False,
+        "--detect-ats",
+        help="For every scored posting at/above the active fit_score threshold not yet "
+        "checked, resolve and store which ATS its apply link actually leads to (PROJECT.md "
+        "§5.7). Read-only w.r.t. scoring -- no LLM call, no primary result touched.",
     ),
     ids: str | None = typer.Option(
         None,
@@ -822,9 +879,13 @@ def analyze(
     --readmit: re-check filtered-out postings against the current
     prefilter and score any that now pass, as primary results. The two can
     be combined; --readmit runs first.
+
+    --detect-ats: for postings at/above threshold, resolve and store the
+    real ATS vendor their apply link leads to. Can be combined with the
+    others; runs last.
     """
-    if not rescore and not readmit:
-        typer.echo("Nothing to do -- pass --rescore or --readmit.", err=True)
+    if not rescore and not readmit and not detect_ats:
+        typer.echo("Nothing to do -- pass --rescore, --readmit, or --detect-ats.", err=True)
         raise typer.Exit(code=1)
 
     try:
@@ -840,8 +901,9 @@ def analyze(
     conn = db.connect(db_path)
     db.init_db(conn)
     try:
-        facts_data = facts.load_facts(facts_path)
-        facts_summary = facts.render_facts_summary(facts_data)
+        if readmit or rescore:
+            facts_data = facts.load_facts(facts_path)
+            facts_summary = facts.render_facts_summary(facts_data)
         reasoning_overrides: dict[str, str | None] = {}
 
         if readmit:
@@ -877,6 +939,15 @@ def analyze(
                         rescored += 1
             suffix = "primary result updated" if record_primary else "new scoring_runs rows"
             typer.echo(f"Re-scored {rescored}/{len(rows)} postings ({suffix}).")
+
+        if detect_ats:
+            result = detect_ats_for_above_threshold(
+                conn, threshold=config.active_threshold.fit_score_min
+            )
+            typer.echo(
+                f"Checked {result['checked']} above-threshold posting(s); "
+                f"found an external ATS for {result['detected']} of them."
+            )
     finally:
         conn.close()
 
